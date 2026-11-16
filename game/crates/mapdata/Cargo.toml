@@ -1,0 +1,9 @@
+[package]
+name = "mapdata"
+edition.workspace = true
+version.workspace = true
+
+# Static map data shared by sim, app and (later) mapbake. No Bevy dependency.
+[dependencies]
+serde.workspace = true
+ron.workspace = true

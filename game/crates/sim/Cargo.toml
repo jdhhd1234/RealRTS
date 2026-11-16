@@ -1,0 +1,9 @@
+[package]
+name = "sim"
+edition.workspace = true
+version.workspace = true
+
+# Simulation core: bevy_ecs only, no rendering. Must run headless.
+[dependencies]
+bevy_ecs.workspace = true
+mapdata.workspace = true
