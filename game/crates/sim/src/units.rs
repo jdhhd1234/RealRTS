@@ -2,6 +2,7 @@
 
 use crate::path::{Cell, find_path, terrain_cost};
 use crate::combat::Battalions;
+use crate::deploy::{Deployment, unit};
 use crate::front::Front;
 use crate::supply::{DIVISION_TARGET, FUEL, StockTarget, Stocks, SupplyPriority};
 use crate::economy::{EconomyState, Nations, order_division};
@@ -49,6 +50,7 @@ pub fn division(id: u32, side: u8, name: &str, pos: Pos) -> impl Bundle {
         StockTarget(DIVISION_TARGET),
         SupplyPriority::default(),
         Front::default(),
+        crate::deploy::Deployment::default(),
     )
 }
 
@@ -136,11 +138,11 @@ fn cell_center(grid: &mapdata::TerrainGrid, (cx, cy): Cell) -> Pos {
 /// Walk along the path; entering a cell costs `terrain_cost` times the plains time.
 pub fn move_units(
     map: Res<Map>,
-    mut units: Query<(Entity, &mut Position, &mut MoveOrder, Option<&Stocks>, Option<&Front>)>,
+    mut units: Query<(Entity, &mut Position, &mut MoveOrder, Option<&Stocks>, Option<&Front>, Option<&mut Deployment>)>,
     mut commands: Commands,
 ) {
     let grid = &map.0.terrain;
-    for (entity, mut pos, mut order, stocks, front) in &mut units {
+    for (entity, mut pos, mut order, stocks, front, dep) in &mut units {
         if stocks.is_some_and(|s| s.0[FUEL] <= 0.0) {
             continue; // out of fuel: order kept, unit waits for resupply
         }
@@ -149,6 +151,7 @@ pub fn move_units(
         if pace <= 0.0 {
             continue;
         }
+        let start = pos.0;
         let mut time_left = 1.0f32; // fraction of this tick
         while time_left > 0.0 && order.next < order.path.len() {
             let cell = order.path[order.next];
@@ -166,6 +169,12 @@ pub fn move_units(
                 pos.0.y += dy / dist * reach;
                 time_left = 0.0;
             }
+        }
+        // Out of contact the column faces its way; in contact combat sets the facing.
+        if let (Some(mut dep), Some(dir)) = (dep, unit(pos.0.x - start.x, pos.0.y - start.y))
+            && front.is_none_or(|f| f.ratio.is_none())
+        {
+            dep.facing = dir;
         }
         if order.next >= order.path.len() {
             commands.entity(entity).remove::<MoveOrder>();

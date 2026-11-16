@@ -1,6 +1,7 @@
 //! Combat (architect.md 4.6, D2): continuous Lanchester-style attrition every 5 minutes between
 //! enemy divisions in contact. Ammo stock scales firepower; defender terrain divides incoming fire.
 
+use crate::deploy::*;
 use crate::front::*;
 use crate::supply::{AMMO, DIVISION_TARGET, Depot, FOOD, Ledger, Stocks};
 use crate::units::{Map, MoveOrder, Position, Side, UnitId};
@@ -43,14 +44,20 @@ impl Battalions {
         self.0.iter().map(|b| arm_firepower(b.arm) * b.strength).sum()
     }
 
-    /// Spread a loss (battalion-equivalents) over battalions in proportion to their strength.
-    fn take_loss(&mut self, loss: f32) {
-        let total = self.total();
-        if total <= 0.0 {
+    /// Spread a loss (battalion-equivalents) by role (`LOSS_SHARE`: the line takes most), then
+    /// within a role in proportion to strength. Shares of empty roles go to the others.
+    pub fn take_loss(&mut self, loss: f32, posture: Posture) {
+        let mut have = [0.0f32; 3];
+        for b in &self.0 {
+            have[role(b.arm, posture).index()] += b.strength;
+        }
+        let share_sum: f32 = (0..3).filter(|&r| have[r] > 0.0).map(|r| LOSS_SHARE[r]).sum();
+        if share_sum <= 0.0 {
             return;
         }
-        let ratio = (loss / total).min(1.0);
         for b in &mut self.0 {
+            let r = role(b.arm, posture).index();
+            let ratio = (loss * LOSS_SHARE[r] / share_sum / have[r]).min(1.0);
             b.strength -= b.strength * ratio;
         }
     }
@@ -75,8 +82,19 @@ pub fn terrain_defense(t: Terrain) -> f32 {
     }
 }
 
-/// Divisions closer than this are in contact.
+/// Division lines (segments) closer than this are in contact.
 pub const CONTACT_RANGE_M: f32 = 15_000.0;
+/// Incoming fire is divided by this when it hits a flank.
+pub const FLANK_DEFENSE: f32 = 0.5;
+
+/// Defense by posture: a dug-in line is best, a column caught on the march worst.
+pub fn posture_defense(p: Posture) -> f32 {
+    match p {
+        Posture::Defend => 1.0,
+        Posture::Attack => 0.8,
+        Posture::March => 0.5,
+    }
+}
 /// Losses (battalion-equivalents) per point of effective firepower per 5-minute step.
 /// Two standard divisions on plains lose roughly 10% a day.
 pub const COMBAT_K: f32 = 2.5e-4;
@@ -101,40 +119,100 @@ pub fn food_factor(food: f32) -> f32 {
     0.5 + 0.5 * (food / DIVISION_TARGET[FOOD]).clamp(0.0, 1.0)
 }
 
-/// Losses, ammo use, and the front outcome (architect.md 13.1): superiority ratio R = losses inflicted
-/// / losses taken, where fire already reflects organization, supply (ammo, food) and retreat.
-/// R >= 1.5 advances, R <= 0.67 or broken organization retreats, otherwise stalemate.
+/// One unit as combat sees it this step.
+struct Fighter {
+    entity: Entity,
+    id: u32,
+    side: u8,
+    pos: Pos,
+    front: Front,
+    /// `None` for partisan bands: no line, never flanked.
+    dep: Option<Deployment>,
+    layout: Layout,
+    /// Ammo, food, organization and retreat on top of the layout's fire.
+    factor: f32,
+}
+
+impl Fighter {
+    fn ends(&self) -> (Pos, Pos) {
+        let facing = self.dep.map_or((1.0, 0.0), |d| d.facing);
+        line_ends(self.pos, facing, self.layout.frontage_m)
+    }
+
+    /// `other` is in front of this unit's line (within 60 deg of its facing).
+    fn frontal(&self, other: Pos) -> bool {
+        let Some(d) = self.dep else { return true };
+        unit(other.x - self.pos.x, other.y - self.pos.y).is_none_or(|(x, y)| x * d.facing.0 + y * d.facing.1 >= FLANK_COS)
+    }
+}
+
+/// Losses, ammo use, and the front outcome (architect.md 13.1, 15): superiority ratio R = losses
+/// inflicted / losses taken. Each division is a line segment (frontage across its facing, from its
+/// virtual battalion deployment). Lines within contact range fight. The line fires only at enemies
+/// in front, and only the part of it facing the enemy's width (local strength); reserves and
+/// artillery reach any contact. Hits on a flank meet half the defense.
+#[allow(clippy::type_complexity)]
 pub fn resolve_combat(
     map: Res<Map>,
     mut commands: Commands,
     mut engagements: ResMut<Engagements>,
     mut ledger: ResMut<Ledger>,
     depots: Query<&Depot>,
-    mut units: Query<(Entity, &UnitId, &Side, &Position, &mut Battalions, &mut Stocks, Option<&mut Front>)>,
+    mut units: Query<(
+        Entity,
+        &UnitId,
+        &Side,
+        &Position,
+        &mut Battalions,
+        &mut Stocks,
+        Option<&mut Front>,
+        Option<&mut Deployment>,
+        Has<MoveOrder>,
+    )>,
 ) {
     let grid = &map.0.terrain;
-    let mut list: Vec<_> = units
+    let mut list: Vec<Fighter> = units
         .iter()
-        .map(|(e, id, s, p, b, st, f)| {
+        .map(|(e, id, s, p, b, st, f, d, moving)| {
             let front = f.copied().unwrap_or_default();
-            let fire = b.firepower() * ammo_factor(st.0[AMMO]) * food_factor(st.0[FOOD]) * front.fire_factor();
-            (e, id.0, s.0, p.0, fire, front)
+            // Posture follows the situation: ordered + in contact = attack, ordered = march column.
+            let dep = d.map(|d| Deployment {
+                posture: match (moving, front.ratio.is_some()) {
+                    (true, true) => Posture::Attack,
+                    (true, false) => Posture::March,
+                    _ => Posture::Defend,
+                },
+                ..*d
+            });
+            let layout = layout(b, dep.map_or(Posture::Defend, |d| d.posture));
+            let factor = ammo_factor(st.0[AMMO]) * food_factor(st.0[FOOD]) * front.fire_factor();
+            Fighter { entity: e, id: id.0, side: s.0, pos: p.0, front, dep, layout, factor }
         })
         .collect();
-    list.sort_by_key(|u| u.1);
+    list.sort_by_key(|u| u.id);
 
-    // Contacts per unit, so firepower is split between all enemies it faces.
+    // Contacts between lines, so firepower is split between all enemies a unit faces.
+    let ends: Vec<_> = list.iter().map(Fighter::ends).collect();
     let mut contacts: Vec<Vec<usize>> = vec![Vec::new(); list.len()];
     engagements.0.clear();
     for i in 0..list.len() {
         for j in i + 1..list.len() {
-            let (a, b) = (&list[i], &list[j]);
-            let d2 = (a.3.x - b.3.x).powi(2) + (a.3.y - b.3.y).powi(2);
-            if a.2 != b.2 && d2 <= CONTACT_RANGE_M * CONTACT_RANGE_M {
+            if list[i].side != list[j].side && segment_dist(ends[i], ends[j]) <= CONTACT_RANGE_M {
                 contacts[i].push(j);
                 contacts[j].push(i);
-                engagements.0.push((a.0, b.0));
+                engagements.0.push((list[i].entity, list[j].entity));
             }
+        }
+    }
+
+    // Face the enemy: a unit that just made contact deploys toward it; an engaged line turns slowly,
+    // so a new enemy from the side hits its flank.
+    for (i, targets) in contacts.iter().enumerate() {
+        let me = list[i].pos;
+        let (sx, sy) = targets.iter().fold((0.0, 0.0), |(x, y), &j| (x + list[j].pos.x - me.x, y + list[j].pos.y - me.y));
+        let fresh = list[i].front.ratio.is_none();
+        if let (Some(d), Some(to)) = (list[i].dep.as_mut(), unit(sx, sy)) {
+            d.facing = if fresh { to } else { turn_toward(d.facing, to, TURN_PER_STEP_RAD) };
         }
     }
 
@@ -145,17 +223,29 @@ pub fn resolve_combat(
         if targets.is_empty() {
             continue;
         }
-        let fp = list[i].4 / targets.len() as f32;
+        let a = &list[i];
+        let ahead: Vec<usize> = targets.iter().copied().filter(|&j| a.frontal(list[j].pos)).collect();
+        // The line is split into one sector per enemy ahead; a sector wider than its enemy only
+        // partly engages it.
+        let sector = a.layout.frontage_m / ahead.len().max(1) as f32;
         for &j in targets {
-            let defense = grid.cell_at(list[j].3).map_or(1.0, |(cx, cy)| terrain_defense(grid.get(cx, cy)));
-            loss[j] += COMBAT_K * fp / defense;
-            inflicted[i] += COMBAT_K * fp / defense;
+            let b = &list[j];
+            let mut fire = a.layout.depth_fire / targets.len() as f32;
+            if ahead.contains(&j) {
+                fire += a.layout.line_fire / ahead.len() as f32 * (b.layout.frontage_m / sector).min(1.0);
+            }
+            let terrain = grid.cell_at(b.pos).map_or(1.0, |(cx, cy)| terrain_defense(grid.get(cx, cy)));
+            let posture = b.dep.map_or(1.0, |d| posture_defense(d.posture));
+            let flank = if b.frontal(a.pos) { 1.0 } else { FLANK_DEFENSE };
+            let hit = COMBAT_K * fire * a.factor / (terrain * posture * flank);
+            loss[j] += hit;
+            inflicted[i] += hit;
         }
     }
 
     for (i, u) in list.iter().enumerate() {
-        let Ok((.., mut bats, mut stocks, front)) = units.get_mut(u.0) else { continue };
-        let mut f = u.5;
+        let Ok((.., mut bats, mut stocks, front, dep, _)) = units.get_mut(u.entity) else { continue };
+        let mut f = u.front;
         if contacts[i].is_empty() {
             f.ratio = None;
             f.speed = 1.0;
@@ -174,14 +264,14 @@ pub fn resolve_combat(
                 1.0
             };
             let taken = loss[i] * mult;
-            bats.take_loss(taken);
+            bats.take_loss(taken, u.dep.map_or(Posture::Defend, |d| d.posture));
             let org_loss = taken * ORG_PER_BN_LOST * if f.retreat.is_some() { RETREAT_ORG_FACTOR } else { 1.0 };
             f.org = (f.org - org_loss).max(0.0);
             f.ratio = Some(r);
             f.speed = advance_speed(r);
-            f.retreat = (losing && !f.hold && !f.encircled).then(|| retreat_dir(u.3, &contacts[i], &list, &depots, &map, u.2));
+            f.retreat = (losing && !f.hold && !f.encircled).then(|| retreat_dir(i, &contacts[i], &list, &depots, &map));
             if f.retreat.is_some() {
-                commands.entity(u.0).remove::<MoveOrder>();
+                commands.entity(u.entity).remove::<MoveOrder>();
             }
             let used = AMMO_PER_STEP_T.min(stocks.0[AMMO]);
             stocks.0[AMMO] -= used;
@@ -192,29 +282,25 @@ pub fn resolve_combat(
         {
             *front = f;
         }
+        if let (Some(mut dep), Some(new)) = (dep, u.dep)
+            && *dep != new
+        {
+            *dep = new;
+        }
     }
 }
 
 /// Away from the enemies in contact, bent toward the nearest own depot.
-fn retreat_dir(
-    me: Pos,
-    contacts: &[usize],
-    list: &[(Entity, u32, u8, Pos, f32, Front)],
-    depots: &Query<&Depot>,
-    map: &Map,
-    side: u8,
-) -> (f32, f32) {
-    let unit = |x: f32, y: f32| {
-        let len = (x * x + y * y).sqrt();
-        if len > 1e-3 { (x / len, y / len) } else { (0.0, 0.0) }
-    };
+fn retreat_dir(me: usize, contacts: &[usize], list: &[Fighter], depots: &Query<&Depot>, map: &Map) -> (f32, f32) {
+    let (me, side) = (list[me].pos, list[me].side);
+    let dir = |x: f32, y: f32| unit(x, y).unwrap_or((0.0, 0.0));
     let (mut ax, mut ay) = (0.0, 0.0);
     for &j in contacts {
-        let (x, y) = unit(me.x - list[j].3.x, me.y - list[j].3.y);
+        let (x, y) = dir(me.x - list[j].pos.x, me.y - list[j].pos.y);
         ax += x;
         ay += y;
     }
-    let (ax, ay) = unit(ax, ay);
+    let (ax, ay) = dir(ax, ay);
     let home = depots
         .iter()
         .filter(|d| d.side == side)
@@ -224,9 +310,9 @@ fn retreat_dir(
             let db = (b.1.x - me.x).powi(2) + (b.1.y - me.y).powi(2);
             da.total_cmp(&db).then(a.0.cmp(&b.0))
         });
-    let (hx, hy) = home.map_or((0.0, 0.0), |(_, p)| unit(p.x - me.x, p.y - me.y));
-    let dir = unit(ax + 0.5 * hx, ay + 0.5 * hy);
-    if dir == (0.0, 0.0) { (ax, ay) } else { dir }
+    let (hx, hy) = home.map_or((0.0, 0.0), |(_, p)| dir(p.x - me.x, p.y - me.y));
+    let d = dir(ax + 0.5 * hx, ay + 0.5 * hy);
+    if d == (0.0, 0.0) { (ax, ay) } else { d }
 }
 
 /// Dissolve worn-out battalions; destroy divisions with none left. Their stocks are lost.
@@ -248,6 +334,7 @@ pub fn remove_destroyed(
 mod tests {
     use super::*;
     use crate::{TICKS_PER_DAY, configure, division, init_world};
+    use crate::deploy::Posture;
     use mapdata::{MapData, Pos, TerrainGrid, TransportGraph};
 
     fn setup(grid: TerrainGrid) -> (World, Schedule) {
@@ -309,6 +396,32 @@ mod tests {
         world.spawn(division(2, 1, "red in forest", Pos { x: 20_500.0, y: 5_500.0 }));
         run(&mut world, &mut schedule, TICKS_PER_DAY);
         assert!(10.0 - strength(&mut world, 2) < (10.0 - strength(&mut world, 1)) * 0.75);
+    }
+
+    #[test]
+    fn hit_on_the_flank_costs_more_than_from_the_front() {
+        let loss_with_second_enemy_at = |x: f32, y: f32| {
+            let (mut world, mut schedule) = setup(TerrainGrid::filled(100, 100, 1000.0, Terrain::Plains));
+            world.spawn(division(1, 0, "blue", Pos { x: 50_500.0, y: 50_500.0 }));
+            world.spawn(division(2, 1, "red front", Pos { x: 60_500.0, y: 50_500.0 }));
+            run(&mut world, &mut schedule, 30); // blue's line now faces east
+            world.spawn(division(3, 1, "red second", Pos { x, y }));
+            run(&mut world, &mut schedule, 60);
+            10.0 - strength(&mut world, 1)
+        };
+        let front = loss_with_second_enemy_at(61_500.0, 45_500.0);
+        let flank = loss_with_second_enemy_at(50_500.0, 61_500.0);
+        assert!(flank > front * 1.2, "flank {flank} vs front {front}");
+    }
+
+    #[test]
+    fn reserves_are_spared_by_the_line() {
+        let mut b = Battalions::standard();
+        b.take_loss(1.0, Posture::Defend);
+        let line = b.0.iter().find(|x| x.arm == Arm::Infantry).unwrap().strength;
+        let reserve = b.0.iter().find(|x| x.arm == Arm::Armor).unwrap().strength;
+        assert!(reserve > line, "armor in reserve {reserve} vs infantry in line {line}");
+        assert!((10.0 - b.total() - 1.0).abs() < 1e-4, "whole loss applied");
     }
 
     #[test]

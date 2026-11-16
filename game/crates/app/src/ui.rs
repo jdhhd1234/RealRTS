@@ -390,6 +390,7 @@ fn build_panels(
     (clock, speed, virt, file): (Res<SimClock>, Res<Speed>, Res<Time<Virtual>>, Res<FileStatus>),
     mut nodes: Query<(&Slot, &mut Node)>,
     ed: Res<Editor>,
+    deps: Query<(&UnitId, &sim::Deployment)>,
 ) {
     let m = &map.0;
     let node_name = |n: mapdata::NodeId| m.graph.node(n).name.clone().unwrap_or_default();
@@ -605,6 +606,20 @@ fn build_panels(
             right.push(El::Kv("Side".into(), side_name(side.0).into(), Tone::Normal));
             right.push(El::Kv("Type".into(), dominant_arm(b).into(), Tone::Normal));
             right.push(El::Kv("Posture".into(), posture(f, moving).into(), Tone::Normal));
+            if let Some((_, d)) = deps.iter().find(|(id, _)| Some(**id) == selected.0) {
+                let l = sim::layout(b, d.posture);
+                right.push(El::Title("DEPLOYMENT".into()));
+                right.push(El::Kv("Formation".into(), format!("{:?}", d.posture), Tone::Normal));
+                right.push(El::Kv(
+                    "Frontage / depth".into(),
+                    format!("{:.0} / {:.0} km", l.frontage_m / 1000.0, l.depth_m / 1000.0),
+                    Tone::Normal,
+                ));
+                right.push(El::Text(
+                    format!("line {:.1}  reserve {:.1}  support {:.1} bn", l.strength[0], l.strength[1], l.strength[2]),
+                    Tone::Dim,
+                ));
+            }
             right.push(El::Title("STATUS".into()));
             let yes_no = |v: bool, good_if: bool| (if v { "YES" } else { "NO" }.to_string(), if v == good_if { Tone::Good } else { Tone::Warn });
             let (t, tone) = yes_no(s.combat_ready, true);

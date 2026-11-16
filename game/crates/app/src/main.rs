@@ -407,6 +407,7 @@ fn draw_overlay(
     fronts: Query<(&Position, &Front)>,
     network: Res<ShowNetwork>,
     camera: Single<&Projection, With<Camera2d>>,
+    lines: Query<(&Position, &Side, &sim::Deployment, &sim::Battalions)>,
 ) {
     let g = &map.0.graph;
     let v = |p: Pos| Vec2::new(p.x, p.y);
@@ -432,6 +433,16 @@ fn draw_overlay(
     }
     for n in g.nodes.iter().filter(|_| network.0) {
         gizmos.circle_2d(v(n.pos), 3.0 * px, Color::BLACK);
+    }
+    // Division lines (frontage across the facing) with a tick toward the enemy side, and depth.
+    for (p, side, d, b) in &lines {
+        let l = sim::layout(b, d.posture);
+        let (a, e) = sim::line_ends(p.0, d.facing, l.frontage_m);
+        let c = if side.0 == PLAYER_SIDE { ui::FRIENDLY } else { ui::ENEMY };
+        let f = Vec2::new(d.facing.0, d.facing.1);
+        gizmos.line_2d(v(a), v(e), c);
+        gizmos.line_2d(v(p.0), v(p.0) + f * ring * 1.6, c);
+        gizmos.line_2d(v(p.0), v(p.0) - f * l.depth_m, c.with_alpha(0.25));
     }
     // Units in combat this step.
     for (a, b) in &engagements.0 {

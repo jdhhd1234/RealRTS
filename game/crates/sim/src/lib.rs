@@ -3,6 +3,8 @@
 use bevy_ecs::prelude::*;
 
 pub mod combat;
+pub mod deploy;
+pub use deploy::*;
 pub mod economy;
 pub use economy::*;
 pub mod front;
@@ -148,7 +150,12 @@ pub fn load_scenario(world: &mut World, baked: mapdata::Baked) {
         world.spawn(depot(side, node));
     }
     for (i, u) in s.units.iter().enumerate() {
-        world.spawn(division(i as u32 + 1, u.side, &u.name, u.pos));
+        let enemy = s.units.iter().filter(|e| e.side != u.side).min_by(|a, b| {
+            let d = |p: mapdata::Pos| (p.x - u.pos.x).powi(2) + (p.y - u.pos.y).powi(2);
+            d(a.pos).total_cmp(&d(b.pos))
+        });
+        let facing = enemy.and_then(|e| unit(e.pos.x - u.pos.x, e.pos.y - u.pos.y)).unwrap_or((1.0, 0.0));
+        world.spawn(division(i as u32 + 1, u.side, &u.name, u.pos)).insert(Deployment { facing, ..Default::default() });
     }
 }
 

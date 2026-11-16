@@ -1,13 +1,15 @@
 //! Territory in three layers (architect.md 12): fixed regions (mapdata), legal ownership per region,
 //! military control per 1 km cell.
 
+use crate::combat::Battalions;
+use crate::deploy::{Deployment, layout, line_ends, point_segment_dist};
 use crate::partisan::Partisan;
 use crate::supply::Depot;
 use crate::units::{Map, Position, Side, UnitId};
 use bevy_ecs::prelude::*;
 use mapdata::{MapData, Pos};
 
-/// A unit controls cells within this distance (12.3).
+/// A unit controls cells within this distance of its line (12.3, 15).
 pub const CONTROL_RADIUS_M: f32 = 10_000.0;
 /// A side controls a region militarily when it holds at least this share of its cells (12.2).
 pub const REGION_CONTROL_SHARE: f32 = 0.8;
@@ -73,20 +75,25 @@ pub fn region_status(map: &MapData, t: &Territory) -> Vec<RegionStatus> {
 pub fn update_military(
     map: Res<Map>,
     mut territory: ResMut<Territory>,
-    units: Query<(&Side, &Position), (With<UnitId>, Without<Partisan>)>,
+    units: Query<(&Side, &Position, Option<&Deployment>, Option<&Battalions>), (With<UnitId>, Without<Partisan>)>,
 ) {
     let grid = &map.0.terrain;
     let mut touched = vec![0u8; grid.cells.len()];
-    let r_cells = (CONTROL_RADIUS_M / grid.cell_m).ceil() as i64;
-    for (side, pos) in &units {
+    for (side, pos, dep, bats) in &units {
         if side.0 >= MAX_SIDES {
             continue;
         }
-        let Some((ux, uy)) = grid.cell_at(pos.0) else { continue };
+        let frontage = match (dep, bats) {
+            (Some(d), Some(b)) => layout(b, d.posture).frontage_m,
+            _ => 0.0,
+        };
+        let (a, b) = line_ends(pos.0, dep.map_or((1.0, 0.0), |d| d.facing), frontage);
+        let reach = CONTROL_RADIUS_M + frontage / 2.0;
+        let (Some((ux, uy)), r_cells) = (grid.cell_at(pos.0), (reach / grid.cell_m).ceil() as i64) else { continue };
         for cy in (uy as i64 - r_cells).max(0)..=(uy as i64 + r_cells).min(grid.height as i64 - 1) {
             for cx in (ux as i64 - r_cells).max(0)..=(ux as i64 + r_cells).min(grid.width as i64 - 1) {
                 let (x, y) = ((cx as f32 + 0.5) * grid.cell_m, (cy as f32 + 0.5) * grid.cell_m);
-                if (x - pos.0.x).powi(2) + (y - pos.0.y).powi(2) <= CONTROL_RADIUS_M * CONTROL_RADIUS_M {
+                if point_segment_dist(Pos { x, y }, a, b) <= CONTROL_RADIUS_M {
                     touched[(cy * grid.width as i64 + cx) as usize] |= 1 << side.0;
                 }
             }
