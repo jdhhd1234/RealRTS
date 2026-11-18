@@ -36,3 +36,9 @@ add_test(NAME mapdata_test COMMAND mapdata_test)
 
 # sim: 시뮬레이션 코어 (EnTT + mapdata만 의존, raylib 금지). 타깃 정의는 src/sim/CMakeLists.txt.
 add_subdirectory(src/sim)
+
+# mapbake: GPKG/SHP/GeoJSON -> mapdata::Baked (SQLite + shapelib). 타깃 정의는 src/mapbake/CMakeLists.txt.
+add_subdirectory(src/mapbake)
+
+# app: Raylib 6.0 + raygui + tinyfiledialogs. 타깃 정의는 src/app/CMakeLists.txt.
+add_subdirectory(src/app)
