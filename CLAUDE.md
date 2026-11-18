@@ -33,4 +33,4 @@ private:
 
 너가 가동되는 툴은 항상 Herdr이라는것을 명심해라.
 그리고 Codex와의 협력도 가능하다.
-OpenCode Go Gemini 4 Argon과 협력이 가능하다.
+OpenCode Go와 협력이 가능하다.
