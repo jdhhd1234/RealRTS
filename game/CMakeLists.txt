@@ -4,6 +4,8 @@ project(RealRTS LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# clangd reads compile flags and include paths from build/compile_commands.json.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # 결정론(architect.md 11장 B3): 부동소수점 최적화 방식 고정.
 if(MSVC)

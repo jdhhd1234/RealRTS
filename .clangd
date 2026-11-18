@@ -1,0 +1,3 @@
+# clangd: use the CMake build's compile database (game/build, Ninja + MSVC).
+CompileFlags:
+  CompilationDatabase: game/build
