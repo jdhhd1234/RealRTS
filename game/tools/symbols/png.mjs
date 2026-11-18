@@ -5,7 +5,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 
 // Larger than shown (34 px) so zoomed-in or HiDPI views stay sharp.
 const RASTER_PX = 96;
-const src = new URL("../../crates/app/assets/symbols/", import.meta.url);
+const src = new URL("../../assets/symbols/svg/", import.meta.url);
 const out = new URL("../../assets/symbols/", import.meta.url);
 mkdirSync(out, { recursive: true });
 for (const f of readdirSync(src).filter((f) => f.endsWith(".svg"))) {

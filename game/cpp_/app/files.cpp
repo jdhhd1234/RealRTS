@@ -33,8 +33,7 @@ std::string read_text(const std::filesystem::path& path) {
     return text.str();
 }
 
-// QUESTION: Rust used .ron for baked maps, so the extension alone told them apart. In C++ both baked
-// maps and GeoJSON layers can be .json; for now a .json with top-level "map" and "scenario" is baked.
+// Baked maps and GeoJSON layers can both be .json: a .json with top-level "map" and "scenario" is baked.
 bool is_baked_json(const std::filesystem::path& path, const std::string& low) {
     if (!ends_with(low, ".json")) return false;
     const auto j = nlohmann::json::parse(read_text(path), nullptr, false);

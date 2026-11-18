@@ -26,19 +26,19 @@ FetchContent_MakeAvailable(nlohmann_json doctest EnTT)
 enable_testing()
 
 # mapdata: 정적 지도 데이터 (렌더링·ECS 의존 없음)
-add_library(mapdata STATIC src/mapdata/mapdata.cpp)
-target_include_directories(mapdata PUBLIC src)
+add_library(mapdata STATIC cpp_/mapdata/mapdata.cpp)
+target_include_directories(mapdata PUBLIC cpp_)
 target_link_libraries(mapdata PUBLIC nlohmann_json::nlohmann_json)
 
 add_executable(mapdata_test tests/mapdata_test.cpp)
 target_link_libraries(mapdata_test PRIVATE mapdata doctest::doctest)
 add_test(NAME mapdata_test COMMAND mapdata_test)
 
-# sim: 시뮬레이션 코어 (EnTT + mapdata만 의존, raylib 금지). 타깃 정의는 src/sim/CMakeLists.txt.
-add_subdirectory(src/sim)
+# sim: 시뮬레이션 코어 (EnTT + mapdata만 의존, raylib 금지). 타깃 정의는 cpp_/sim/CMakeLists.txt.
+add_subdirectory(cpp_/sim)
 
-# mapbake: GPKG/SHP/GeoJSON -> mapdata::Baked (SQLite + shapelib). 타깃 정의는 src/mapbake/CMakeLists.txt.
-add_subdirectory(src/mapbake)
+# mapbake: GPKG/SHP/GeoJSON -> mapdata::Baked (SQLite + shapelib). 타깃 정의는 cpp_/mapbake/CMakeLists.txt.
+add_subdirectory(cpp_/mapbake)
 
-# app: Raylib 6.0 + raygui + tinyfiledialogs. 타깃 정의는 src/app/CMakeLists.txt.
-add_subdirectory(src/app)
+# app: Raylib 6.0 + raygui + tinyfiledialogs. 타깃 정의는 cpp_/app/CMakeLists.txt.
+add_subdirectory(cpp_/app)

@@ -1,8 +1,4 @@
-# Bevy 0.19.0 engine source: cloned separately, see README.md
-/bevy/
 # milsymbol (JS) source for APP-6 symbol rendering: cloned separately
 /milsymbol/
-target/
-/game/example_geodata/cargo_target
 # CMake build output
 /game/build/

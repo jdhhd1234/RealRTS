@@ -1,4 +1,4 @@
-﻿// Generates the APP-6 (D) symbol SVGs the game uses into game/crates/app/assets/symbols/.
+﻿// Generates the APP-6 (D) symbol SVGs the game uses into game/assets/symbols/svg/.
 // Needs the milsymbol clone at ../milsymbol (repo root). Run from game/: node tools/symbols/gen.mjs
 import { ms, app6d } from "../../../milsymbol/index.mjs";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -14,7 +14,7 @@ const kinds = {
   partisan: ["00", "121100"], // shortcut: no guerrilla icon chosen yet; echelon-less infantry
   depot: ["00", "163400"], // sustainment / supply
 };
-const out = new URL("../../crates/app/assets/symbols/", import.meta.url);
+const out = new URL("../../assets/symbols/svg/", import.meta.url);
 mkdirSync(out, { recursive: true });
 for (const [side, id] of Object.entries(identity)) {
   for (const [kind, [echelon, entity]] of Object.entries(kinds)) {

@@ -1,5 +1,5 @@
 """Writes samples/sample.gpkg and samples/geojson/*.geojson: a small fictional map that follows the RealRTS layer contract
-(see crates/mapbake/src/lib.rs). Open it in QGIS as a template for your own maps.
+(see cpp_/mapbake/mapbake.cpp). Open it in QGIS as a template for your own maps.
 
 Standard library only. Run from game/:  python tools/sample_gpkg.py
 CRS: EPSG:32635 (WGS 84 / UTM zone 35N), meters. The geography is invented.

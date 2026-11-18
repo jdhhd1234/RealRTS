@@ -1,5 +1,7 @@
 # Rust → C++20 포팅 규칙 (작업자 공통)
 
+> 이식 완료(2026-11-18). Rust 원본은 git 태그 `rust-backup`에만 있다. C++ 소스 폴더는 이후 `src/`에서 `cpp_/`로 바뀌었다.
+
 참고 코드: `game/crates/` (Rust). 결과물: `game/src/<crate>/`, 테스트: `game/tests/`.
 반드시 먼저 읽기: 저장소 루트 `CLAUDE.md`(코드 규칙), `architect.md`(2·3·5.4장), 이미 포팅된 `src/mapdata/mapdata.hpp/.cpp`와 `tests/mapdata_test.cpp`(스타일 기준).
 

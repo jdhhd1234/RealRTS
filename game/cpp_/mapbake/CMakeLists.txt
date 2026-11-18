@@ -38,7 +38,7 @@ add_library(mapbake STATIC
     mapbake.cpp
     geom.cpp
     folder.cpp)
-target_include_directories(mapbake PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(mapbake PUBLIC ${CMAKE_SOURCE_DIR}/cpp_)
 target_link_libraries(mapbake PUBLIC mapdata sqlite3 shapelib)
 
 add_executable(mapbake_cli main.cpp)
