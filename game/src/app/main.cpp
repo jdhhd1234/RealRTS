@@ -486,7 +486,6 @@ int run(int argc, char** argv) {
             EndMode2D();
             const auto clicked = draw_ui(ui, {world, play, editor, file});
             EndDrawing();
-            { static int f = 0; if (++f == 120) TakeScreenshot("debug_shot.png"); }  // TEMP
             ui_actions(clicked, ui, {world, play, editor, loader, file, quit});
         }
     }
