@@ -1,8 +1,12 @@
-# RealRTS 아키텍처 설계 (초안 v0.1)
+# RealRTS 아키텍처 설계 (초안 v0.2 — C++ / EnTT / Raylib 2D)
 
 > 상태: **초안 — 사람 검토 대기**. `chat.md`의 논의를 구체화한 것.
 > `[가정]` 표시는 chat.md에서 결정되지 않아 임의로 정한 값이다. 검토 시 우선 확인할 것.
 > **`ai_ask.md` 답변(2026-11-15)이 본문과 충돌하면 11장이 우선한다.**
+>
+> **v0.2 (2026-11-17):** 기술 스택을 Rust/Bevy에서 **C++20 + EnTT + Raylib 2D**로 바꿨다.
+> 5.4, 13.8, 14, 15장의 "구현됨"은 **기존 Rust 코드(`game/crates/`)** 기준이다. C++로 옮기기 전까지 그 코드는 동작 참고용이다.
+> C++ 대체 라이브러리 중 정해지지 않은 것은 `[가정: C++]`로 표시했다.
 
 ---
 
@@ -18,6 +22,7 @@ QGIS 지도와 NATO APP-6 군대부호만으로 표현되는 **2D 실시간 작�
 3. **시스템마다 다른 시간 간격(cadence)** — 매 프레임 계산하지 않는다.
 4. **결정론(determinism)** — 같은 시드 + 같은 명령 로그 = 같은 결과. 리플레이·자동 밸런스 테스트의 전제.
 5. **AI(바이브 코딩) 작업 단위 = 하나의 시스템 + 그 테스트.** 시스템 경계가 곧 작업 경계.
+6. **코드 규칙은 `CLAUDE.md`를 따른다** — 상속 기반 다형성 금지, God class 금지, `std::vector` 우선, 스마트 포인터는 꼭 필요할 때만. 시스템은 class 계층이 아니라 **자유 함수**(`void movement_system(entt::registry&)`)로 만든다.
 
 ---
 
@@ -42,39 +47,44 @@ chat.md 마지막 질문(전술/작전/전략/혼합)에 답이 없었다. 보�
 
 | 항목 | 결정 | 비고 |
 |---|---|---|
-| 언어 | Rust (stable) | |
-| 엔진 | Bevy **0.19.0 고정** `[가정]` | 리포지토리의 `bevy/`가 0.19.0 소스 클론. chat.md는 0.20 출시를 언급했으나, 로컬 소스와 맞추기 위해 0.19로 고정. 업그레이드는 별도 작업으로만. |
-| 코어 의존성 | `bevy_ecs`만 (렌더링 없음) | 헤드리스 테스트 가능 |
-| 난수 | `rand_chacha` (시드 고정) | 결정론 |
-| 데이터 포맷 | 원본 GeoJSON/GPKG → 빌드 산출물 `ron`(디버그) / `bincode`(배포) | |
-| 지리 처리 | `geo`, `proj`(오프라인 툴에서만) | 런타임에는 투영 계산 없음 |
+| 언어 | **C++20** | 규칙은 `CLAUDE.md` |
+| 빌드 | CMake + **FetchContent**로 버전 고정 (태그/커밋 지정) | Windows 먼저 (MSVC) |
+| 렌더링·입력·창 | **Raylib 6.0으로 고정** (2D만 사용) | `app`에서만 의존 |
+| 코어 의존성 | **EnTT만** (렌더링 없음) `[가정: C++ 버전 하나로 고정]` | 헤드리스 테스트 가능 |
+| 난수 | 직접 구현한 **PCG** (PCG32), 시드 고정 | `std::uniform_*_distribution`은 컴파일러마다 결과가 달라 **사용 금지**. 분포 함수도 직접 구현 |
+| 데이터 포맷 | 원본 GeoJSON/GPKG → 빌드 산출물 JSON(디버그, `nlohmann/json`) / 자체 바이너리(배포) `[가정: C++]` | Rust의 `ron`/`bincode` 대체 |
+| 지리 처리 | GDAL/OGR `[가정: C++]` (오프라인 툴 `mapbake`에서만) | 런타임에는 투영 계산 없음 |
+| UI | raygui `[가정: C++]` | Rust의 `bevy_ui` 대체 |
+| Lua | Lua 5.4 + sol2 `[가정: C++]` | Rust의 `mlua` 대체 |
+| 테스트 | **doctest** + CTest | |
 
-AI에게 코드를 시킬 때: **"Bevy 0.19 API만 사용, 불확실하면 `bevy/` 소스와 `bevy/examples/` 확인"** 을 항상 지시한다.
+AI에게 코드를 시킬 때: **"Raylib 6.0 / 고정한 EnTT 버전 API만 사용, 불확실하면 해당 헤더(`raylib.h`, `entt/`)와 공식 예제 확인, `CLAUDE.md` 규칙 준수"** 를 항상 지시한다.
 
 ---
 
-## 3. 저장소 구조 (Cargo workspace)
+## 3. 저장소 구조 (CMake)
 
 ```
-RealRTS/
-├─ bevy/                 # Bevy 0.19.0 엔진 소스 (참고용, 수정 금지)
+RealRTS_cpp/
 ├─ game/
-│  ├─ Cargo.toml         # workspace
-│  ├─ crates/
-│  │  ├─ sim/            # 시뮬레이션 코어 (bevy_ecs만 의존, 렌더링 없음)
-│  │  ├─ mapdata/        # 게임 지도 데이터 타입 + 로더 (sim과 app이 공유)
-│  │  ├─ app/            # Bevy 실행 바이너리: 렌더링, 입력, UI
+│  ├─ CMakeLists.txt     # 최상위
+│  ├─ src/
+│  │  ├─ sim/            # 시뮬레이션 코어 (EnTT만 의존, 렌더링 없음) → 정적 라이브러리
+│  │  ├─ mapdata/        # 게임 지도 데이터 타입 + 로더 (sim과 app이 공유) → 정적 라이브러리
+│  │  ├─ app/            # Raylib 실행 파일: 렌더링, 입력, UI
 │  │  └─ symbols/        # APP-6 부호 합성 (SIDC → 스프라이트 레이어)
+│  ├─ tests/             # sim, mapdata 헤드리스 테스트
 │  ├─ tools/
 │  │  └─ mapbake/        # QGIS 산출물 → 게임 지도 데이터 변환 CLI (오프라인)
-│  └─ assets/
-│     ├─ maps/<시나리오>/  # mapbake 산출물 + 래스터 타일
-│     ├─ symbols/        # APP-6 레이어 PNG
-│     └─ scenarios/      # 초기 배치, 경제 파라미터 (ron)
+│  ├─ assets/
+│  │  ├─ maps/<시나리오>/  # mapbake 산출물 + 래스터 타일
+│  │  ├─ symbols/        # APP-6 레이어 PNG/SVG
+│  │  └─ scenarios/      # 초기 배치, 경제 파라미터
+│  └─ crates/            # 기존 Rust 구현 (이전 완료 후 삭제)
 └─ gis/                  # QGIS 프로젝트 원본 (.qgz, .gpkg)
 ```
 
-의존 방향: `app → sim → mapdata`, `app → symbols`, `mapbake → mapdata`. **`sim`은 `app`을 절대 모른다.**
+의존 방향: `app → sim → mapdata`, `app → symbols`, `mapbake → mapdata`. **`sim`은 `app`과 Raylib을 절대 모른다** (`sim`의 CMake 타깃은 raylib을 링크하지 않는다).
 
 ---
 
@@ -84,19 +94,21 @@ RealRTS/
 
 | 데이터 | 저장 방식 | 이유 |
 |---|---|---|
-| 부대(사단/여단), 보급 거점, 수송대 | ECS 엔티티 + 컴포넌트 | 개별 상태, 생성/파괴 잦음 |
-| 지형 격자 | `Resource<TerrainGrid>` (평면 배열) | 조회 위주, 불변 |
-| 도로·철도 네트워크 | `Resource<TransportGraph>` (인접 리스트) | 그래프 알고리즘 |
-| 지역(행정구역) 경제·치안 | `Resource<Regions>` (`Vec<RegionState>`) | 집계 데이터 |
-| 국가 단위 재고·생산 | `Resource<Nations>` | 집계 데이터 |
+| 부대(사단/여단), 보급 거점, 수송대 | EnTT 엔티티 + 컴포넌트 (`struct`) | 개별 상태, 생성/파괴 잦음 |
+| 지형 격자 | `registry.ctx()`의 `TerrainGrid` (평면 `std::vector`) | 조회 위주, 불변 |
+| 도로·철도 네트워크 | `registry.ctx()`의 `TransportGraph` (인접 리스트) | 그래프 알고리즘 |
+| 지역(행정구역) 경제·치안 | `registry.ctx()`의 `Regions` (`std::vector<RegionState>`) | 집계 데이터 |
+| 국가 단위 재고·생산 | `registry.ctx()`의 `Nations` | 집계 데이터 |
 
-엔티티가 그래프 노드를 참조할 때는 `NodeId(u32)` 같은 인덱스로 참조한다(포인터/Entity 교차참조 금지).
+엔티티가 그래프 노드를 참조할 때는 `struct NodeId { std::uint32_t value; };` 같은 인덱스로 참조한다(포인터/`entt::entity` 교차참조 금지).
+
+결정론 주의: EnTT `view` 순회 순서는 생성·삭제 이력에 따라 바뀔 수 있다. 결과가 순서에 영향을 받는 시스템(전투, 보급 배분)은 **`UnitId` 기준으로 정렬한 뒤** 처리한다.
 
 ### 4.2 시간 시스템
 
-- 코어는 Bevy `FixedUpdate`에서 **1 tick = 게임 1분** 고정으로 돈다.
+- 코어는 **고정 tick**으로 돈다: **1 tick = 게임 1분**. `app`의 Raylib 메인 루프가 `GetFrameTime()`을 누적(accumulator)해서 필요한 만큼 `sim::step()`을 부른다.
 - 배속은 "프레임당 몇 tick을 돌리느냐"로만 구현한다 (tick 크기는 불변 → 결정론 유지).
-- 각 시스템은 `SimClock.tick % cadence == 0` 조건(run condition)으로 실행된다.
+- 각 시스템은 `clock.tick % cadence == 0`일 때만 실행된다.
 
 | 시스템 | 주기 (게임 시간) `[chat.md 초기값]` | tick 간격 |
 |---|---|---|
@@ -108,7 +120,7 @@ RealRTS/
 | 파르티잔 활동 | 6시간 | 360 |
 | 산업 생산·경제 | 1일 | 1440 |
 
-**같은 tick에 여러 시스템이 실행될 때 순서 고정** (SystemSet 체인):
+**같은 tick에 여러 시스템이 실행될 때 순서 고정** — `sim::step()` 안에서 아래 순서대로 함수를 부른다:
 
 ```
 Commands → Movement → Combat → Supply → Partisan → Economy → Cleanup(파괴/항복 처리) → Events 발행
@@ -133,7 +145,7 @@ chat.md 예시 체인이 이 구조로 자연스럽게 발생해야 한다:
 
 ### 4.4 부대 (Unit)
 
-컴포넌트 `[초안]`:
+컴포넌트 `[초안]` (모두 데이터만 가진 `struct`):
 
 | 컴포넌트 | 내용 |
 |---|---|
@@ -145,7 +157,7 @@ chat.md 예시 체인이 이 구조로 자연스럽게 발생해야 한다:
 | `Stocks` | 연료, 탄약, 일반(식량 등) — 톤 단위 |
 | `Consumption` | 상태별 일일 소모율 (대기/이동/공격/방어) |
 | `Order` | 현재 명령 (이동/공격/방어/후방경비/휴식) |
-| `SupplySource` | 연결된 보급 노드 `NodeId` (없으면 고립) |
+| `SupplySource` | 연결된 보급 노드 `NodeId` (없으면 고립, `std::optional<NodeId>`) |
 
 ### 4.5 이동
 
@@ -176,7 +188,7 @@ chat.md 예시 체인이 이 구조로 자연스럽게 발생해야 한다:
 2. 부대 → 가장 가까운 아군 depot 연결 (`SupplySource`), 거리 초과 시 트럭 수송 효율 감소.
 3. 국가 재고 → depot 까지 **용량 제약 흐름** 계산.
    - MVP: 우선순위 기반 탐욕 배분 (플레이어가 지정한 우선 부대 먼저, 나머지 비례 배분).
-   - 이후: 최소비용 최대유량(min-cost max-flow)으로 교체 가능하도록 인터페이스 분리.
+   - 이후: 최소비용 최대유량(min-cost max-flow)으로 교체 가능하도록 함수 경계를 분리 (가상 함수 인터페이스가 아니라 같은 시그니처의 자유 함수 교체).
 4. 수송 중인 물자는 `transit_hours` 동안 "파이프라인 재고"로 존재 → 지연 표현, 습격 대상.
 
 **불변 조건 (테스트 필수)**
@@ -224,23 +236,26 @@ chat.md 예시 체인이 이 구조로 자연스럽게 발생해야 한다:
 
 ### 4.11 코어 외부 인터페이스
 
-```rust
-// 입력: 모든 조작은 명령으로만 코어에 들어간다
-enum SimCommand {
-    Move { unit: UnitId, path_goal: Pos },
-    Attack { unit: UnitId, target: UnitId },
-    SetPosture { unit: UnitId, posture: Posture },
-    AssignRearSecurity { unit: UnitId, region: RegionId },
-    SetSupplyPriority { unit: UnitId, priority: u8 },
-    RepairEdge { edge: EdgeId },
-}
-// 배속/일시정지는 SimCommand가 아니다: 결과에 영향이 없으므로 app이 Time<Fixed> 주기만 바꾼다 (M1).
-// 출력: 코어는 이벤트를 발행하고, app은 상태를 읽기 전용으로 조회
-enum SimEvent { CombatResolved{..}, EdgeSabotaged{..}, UnitIsolated{..}, ProductionReport{..}, .. }
+```cpp
+// 입력: 모든 조작은 명령으로만 코어에 들어간다 (상속 대신 std::variant)
+struct MoveCommand              { UnitId unit; Pos path_goal; };
+struct AttackCommand            { UnitId unit; UnitId target; };
+struct SetPostureCommand        { UnitId unit; Posture posture; };
+struct AssignRearSecurityCommand{ UnitId unit; RegionId region; };
+struct SetSupplyPriorityCommand { UnitId unit; std::uint8_t priority; };
+struct RepairEdgeCommand        { EdgeId edge; };
+
+using SimCommand = std::variant<MoveCommand, AttackCommand, SetPostureCommand,
+                                AssignRearSecurityCommand, SetSupplyPriorityCommand,
+                                RepairEdgeCommand>;
+// 배속/일시정지는 SimCommand가 아니다: 결과에 영향이 없으므로 app이 프레임당 tick 수만 바꾼다 (M1).
+
+// 출력: 코어는 이벤트를 std::vector<SimEvent>에 쌓고, app은 상태를 읽기 전용으로 조회
+using SimEvent = std::variant<CombatResolved, EdgeSabotaged, UnitIsolated, ProductionReport /*, ... */>;
 ```
 
 - 명령은 `(tick, SimCommand)` 로그로 기록 → 저장/리플레이 = 시드 + 시나리오 + 명령 로그.
-- `app`은 코어 컴포넌트를 **읽기만** 한다. 쓰기는 반드시 `SimCommand`.
+- `app`은 코어 컴포넌트를 **읽기만** 한다 (`const entt::registry&`). 쓰기는 반드시 `SimCommand`.
 
 ---
 
@@ -251,7 +266,8 @@ enum SimEvent { CombatResolved{..}, EdgeSabotaged{..}, UnitIsolated{..}, Product
 - 원본: QGIS에서 WGS84(EPSG:4326) 등 임의 좌표계.
 - **게임 좌표계: 시나리오별 등거리에 가까운 투영 1개로 고정** `[가정: 해당 지역 UTM 존, 단위 m]`.
 - 게임 내 모든 거리/속도/용량 계산은 이 평면 좌표(m) 기준. 런타임에 위경도 계산 없음.
-- 원점 = 지도 좌하단, x 동쪽+, y 북쪽+ (Bevy 2D 좌표와 동일 방향).
+- 원점 = 지도 좌하단, x 동쪽+, y 북쪽+.
+- **Raylib 2D는 y가 아래쪽+ 이다.** 게임 좌표 → 화면 좌표 변환은 `app`에서 한 곳(`world_to_screen`)에서만 y를 뒤집는다. `sim`은 화면 좌표를 모른다.
 
 ### 5.2 QGIS에서 내보낼 레이어
 
@@ -273,13 +289,13 @@ enum SimEvent { CombatResolved{..}, EdgeSabotaged{..}, UnitIsolated{..}, Product
 3. 도로/철도 라인 → 교차점·끝점에서 노드 분할 → `TransportGraph` (간선 길이·용량 계산).
 4. 도시·산업 포인트 → 가장 가까운 그래프 노드 / 소속 지역에 연결.
 5. 검증: 그래프 연결성, 고립 노드, 지역 커버리지 리포트 출력.
-6. `assets/maps/<시나리오>/map.ron|bin` + 베이스맵 타일 출력.
+6. `assets/maps/<시나리오>/map.json|bin` + 베이스맵 타일 출력.
 
 basemap 래스터와 벡터 데이터는 **반드시 같은 투영·범위로** 내보낸다 (정렬 깨짐 방지). mapbake가 범위(bbox) 불일치를 오류로 처리.
 
-### 5.4 구현된 내용 (M8 + M9, 2026-11-15)
+### 5.4 구현된 내용 (Rust M8 + M9, 2026-11-15 — C++ 이전 대상)
 
-5.2·5.3은 초안이다. 실제 구현은 아래와 같고, 이 절이 우선한다.
+5.2·5.3은 초안이다. 실제 구현(Rust)은 아래와 같고, C++ 이전 시 이 동작을 그대로 따른다.
 
 - **입력:** `.gpkg` 하나, 또는 레이어마다 파일 하나인 폴더(`.geojson`/`.json`/`.shp`, 파일 이름 = 레이어 이름, 예: `terrain.shp`, `rail.geojson`, 형식 섞어도 됨). 폴더 안 파일 하나를 고르면 폴더 전체를 읽는다. Shapefile은 `.shx`·`.dbf`가 필요하고 `.prj`·`.cpg`(문자 인코딩)를 읽는다. GeoJSON은 QGIS가 투영 좌표계로 내보낼 때 쓰는 `crs` 항목을 읽는다. 좌표계 정보가 없으면 좌표 범위가 ±180/±90 안이면 도 단위로 보고 거부한다. 모든 레이어가 같은 **투영 좌표계(미터)** 여야 한다. 지리 좌표계(도 단위, 예: EPSG:4326)는 거부하고 "QGIS에서 UTM 등으로 내보내라"는 오류를 낸다. 재투영은 게임에서 하지 않는다.
 - **레이어 규약** (테이블 이름은 대소문자 무시, 모두 선택, 그 밖의 레이어는 무시):
@@ -296,37 +312,38 @@ basemap 래스터와 벡터 데이터는 **반드시 같은 투영·범위로** 
 
 - **변환:** 전체 범위를 1 km 격자로 맞춘다(최대 2000 × 2000 km). 폴리곤은 셀 중심 기준 스캔라인으로 래스터화한다(구멍 지원). 어느 지역에도 속하지 않는 셀은 "Unassigned" 지역이 된다. 라인 끝점은 2 km 안의 노드에 붙고, 없으면 분기점 노드를 새로 만든다. 간선 길이 = 폴리라인 길이.
 - **시나리오:** Lua가 들어오기 전까지는 위 속성(side, control, base_side, depot_side, units)이 시작 상황이다. 기지 재고는 품목당 20000 t 고정이다.
-- **출력:** `mapdata::Baked { map, scenario }`. 게임이 `.gpkg`를 직접 열거나(File > Open, 작업 스레드에서 변환), `mapbake` CLI로 `.ron`으로 미리 구워 열 수 있다.
+- **출력:** `mapdata::Baked { map, scenario }`. 게임이 `.gpkg`를 직접 열거나(File > Open, 작업 스레드 `std::jthread`에서 변환), `mapbake` CLI로 미리 구워 열 수 있다 (Rust는 `.ron`, C++은 JSON `[가정: C++]`).
 - **샘플:** `game/tools/sample_gpkg.py`가 위 규약을 따르는 `game/samples/sample.gpkg`와 같은 내용의 `game/samples/geojson/*.geojson`(UTM 35N, 가상 지형)을 만든다. QGIS 템플릿으로 쓸 수 있다.
-- **APP-6 부호:** `game/tools/symbols/gen.mjs`(milsymbol, APP-6 D 숫자 SIDC)로 SVG를 만들어 `crates/app/assets/symbols/`에 둔다. 앱은 SVG를 바이너리에 포함하고, 시작할 때 resvg로 래스터화한다. 아군 3 / 적군 6 × 보병·기갑·포병(사단 XX), 파르티잔(제대 없는 보병), 보급소(sustainment supply). 화면 크기는 줌과 무관하게 일정하다.
+- **APP-6 부호:** `game/tools/symbols/gen.mjs`(milsymbol, APP-6 D 숫자 SIDC)로 SVG를 만든다. Rust 앱은 SVG를 바이너리에 포함하고 시작할 때 resvg로 래스터화했다. C++에서는 `gen.mjs`가 **PNG까지 미리 만들어** `game/assets/symbols/`에 두고 Raylib `LoadTexture`로 읽는다 (런타임 SVG 래스터화 없음). 아군 3 / 적군 6 × 보병·기갑·포병(사단 XX), 파르티잔(제대 없는 보병), 보급소(sustainment supply). 화면 크기는 줌과 무관하게 일정하다.
 - **아직 없음:** basemap 래스터, 산업 포인트, 연결성 검증 리포트, 도시 인구.
 
 ---
 
-## 6. 프레젠테이션 (`app`, Bevy)
+## 6. 프레젠테이션 (`app`, Raylib 2D)
 
-- 카메라: 2D 직교, 줌/팬. 줌 레벨에 따라 표시 제대(echelon) 변경 (멀리서 군단/사단, 가까이 여단/연대).
-- 지도: 베이스맵 타일 스프라이트 + 선택적 오버레이(보급 용량 히트맵, 파르티잔 추정 위험도, 통제 지역).
-- 부대: APP-6 부호 스프라이트 (`symbols` 크레이트).
-- UI: `bevy_ui` 사용 `[가정]` (부대 정보 패널, 보급 현황, 지역 정보, 이벤트 로그, 배속 버튼).
-- 입력: 마우스 선택/드래그 이동 명령 → `SimCommand` 생성.
+- 메인 루프: `InitWindow` → `while (!WindowShouldClose())` { 입력 처리 → 고정 tick 누적 실행(4.2) → `BeginDrawing` / `BeginMode2D(camera)` / 그리기 / `EndMode2D` / UI / `EndDrawing` }.
+- 카메라: `Camera2D`, 줌/팬. 줌 레벨에 따라 표시 제대(echelon) 변경 (멀리서 군단/사단, 가까이 여단/연대).
+- 지도: 베이스맵 타일 `Texture2D` + 선택적 오버레이(보급 용량 히트맵, 파르티잔 추정 위험도, 통제 지역). 셀 단위 오버레이는 매 프레임 그리지 않고 `RenderTexture2D`에 미리 그려 두고 바뀔 때만 갱신한다.
+- 부대: APP-6 부호 텍스처 (`symbols`).
+- UI: raygui `[가정: C++]` (부대 정보 패널, 보급 현황, 지역 정보, 이벤트 로그, 배속 버튼).
+- 입력: 마우스 선택/드래그 이동 명령 (`GetScreenToWorld2D`) → `SimCommand` 생성.
 - 코어 상태를 매 프레임 읽어 시각 상태 갱신, tick 사이는 위치 보간.
+- Raylib 자원(`Texture2D`, `RenderTexture2D`)은 RAII 래퍼(복사 금지, 이동 허용)로 감싸 `Unload*`를 소멸자에서 부른다.
 
 ### 6.1 APP-6 부호 (`symbols`) `[가정]`
 
 - 입력: SIDC 코드 (APP-6D 20자리).
 - 합성 레이어: 프레임(진영: 아군 파랑 사각형 / 적군 빨강 마름모 등) + 병과 아이콘 + 제대 표식 + 상태 수식어(전력 막대, 보급 상태 색).
-- 레이어 PNG는 오프라인으로 미리 렌더링해 `assets/symbols/`에 두고, 런타임에는 겹쳐 그리기만.
-- 레이어 PNG 생성 방법은 미정 (외부 도구로 SVG 렌더링 등) — 검토 필요.
+- 레이어 PNG는 오프라인(milsymbol, 5.4)으로 미리 렌더링해 `assets/symbols/`에 두고, 런타임에는 `DrawTexture`로 겹쳐 그리기만.
 
 ---
 
 ## 7. 테스트 전략
 
-- `sim`은 `World` + `Schedule`만으로 헤드리스 실행 → `cargo test -p sim`.
+- `sim`은 `entt::registry` + `sim::step()`만으로 헤드리스 실행 → `ctest` (Raylib 링크 없음).
 - 시스템별 단위 테스트: 작은 수작업 시나리오(노드 3개, 부대 2개 등)로 기대값 검증.
 - 불변 조건 테스트: 4.7의 물자 보존·용량 제약을 N tick 실행 후 검사.
-- 결정론 테스트: 같은 시드·명령 로그로 두 번 돌려 상태 해시 비교.
+- 결정론 테스트: 같은 시드·명령 로그로 두 번 돌려 상태 해시 비교. 가능하면 MSVC / GCC(Linux) 양쪽에서 같은 해시인지도 확인.
 - 밸런스 회귀: 헤드리스로 시나리오를 X일 돌려 핵심 지표(전선 보급률, 파르티잔 사건 수) 범위 확인.
 
 ---
@@ -334,11 +351,12 @@ basemap 래스터와 벡터 데이터는 **반드시 같은 투영·범위로** 
 ## 8. 구현 순서 (바이브 코딩 단위)
 
 각 단계 = AI에게 주는 작업 1개 + 테스트. 이전 단계 테스트가 통과해야 다음 단계.
+Rust로 이미 구현된 단계도 C++에서는 M0부터 다시 진행한다 (Rust 코드는 동작 참고용).
 
 | 단계 | 내용 | 완료 조건 |
 |---|---|---|
-| M0 | workspace 생성, Bevy 0.19 고정, 빈 창 + 헤드리스 sim 테스트 1개 | `cargo run -p app`, `cargo test -p sim` 통과 |
-| M1 | `SimClock` + cadence run condition + 배속 | tick 카운트 테스트 |
+| M0 | CMake 프로젝트, Raylib 6.0·EnTT 고정, 빈 창 + 헤드리스 sim 테스트 1개 | `app` 실행 시 창 표시, `ctest` 통과 |
+| M1 | `SimClock` + cadence 조건 + 배속 | tick 카운트 테스트 |
 | M2 | `mapdata` 타입 + 수작업 테스트 지도 (QGIS 없이) | 로더 테스트 |
 | M3 | 부대 생성 + 이동 (격자 A*) + 화면에 임시 사각형 표시 | 클릭 이동 동작 |
 | M4 | 보급 그래프 + 1시간 배분 (탐욕) + 소모 | 4.7 불변 조건 테스트 |
@@ -355,14 +373,14 @@ basemap 래스터와 벡터 데이터는 **반드시 같은 투영·범위로** 
 ## 9. 검토 필요 항목 (사람 결정)
 
 1. **규모**: 작전급 가정이 맞는가? (1장)
-2. **Bevy 버전**: 로컬 0.19.0 고정 vs 0.20으로 올릴지.
+2. **C++ 라이브러리**: 2장의 `[가정: C++]` 항목 (데이터 포맷, GDAL, raygui, sol2). 빌드(FetchContent)·난수(PCG)·테스트(doctest)는 확정.
 3. **조작 단위**: 플레이어가 사단을 움직이는가, 여단/연대까지 내려가는가.
 4. **배경 시대/전역**: 시나리오 지역이 정해져야 투영(UTM 존)·장비 수치가 정해짐.
 5. **격자 크기**: 1 km 셀이 적절한가.
 6. **보급 물자 종류**: 연료/탄약/일반 3종으로 충분한가.
 7. **파르티잔 플레이 가능 여부**: 점령군 측만 플레이 vs 파르티잔 측도 플레이.
 8. **멀티플레이 계획**: 있다면 결정론을 락스텝 수준(고정소수점)으로 강화해야 함.
-9. **APP-6 레이어 이미지 생성 방법**.
+9. ~~**APP-6 PNG 생성 방법**~~ → 오프라인 PNG 미리 생성으로 확정 (5.4).
 10. **정보 전장(안개)**: 적 부대·파르티잔 강도를 어디까지 숨길지.
 
 ---
@@ -378,10 +396,10 @@ basemap 래스터와 벡터 데이터는 **반드시 같은 투영·범위로** 
 | 승리 조건 (A6) | 점령지 민간인을 자국 문화로 **동화** | 지역(Region)에 인구·문화 구성 필드 필요 (G4와 연결) |
 | 한 판 길이 (A7) | 게임 시간 최소 2년 | 장기 실행 성능·저장 필요. 배속 상한 상향 검토 |
 | 주 모드 (A8) | 샌드박스 | |
-| Bevy (B1, B2) | 0.19.0. **로컬 `bevy/`를 path 의존성으로 사용**. 엔진 수정은 불가피할 때만 | 2장 수정 |
-| 멀티플레이 (B3) | 나중에 가능성 있음 | 결정론 유지(시드 RNG, 고정 tick). 고정소수점 전환은 보류하되 f32 사용 범위를 sim 내부에 가둔다 |
+| 엔진 (B1, B2) | ~~Bevy 0.19.0~~ → **C++20 + EnTT + Raylib 6.0 (2D)** (2026-11-17 변경) | 2장 |
+| 멀티플레이 (B3) | 나중에 가능성 있음 | 결정론 유지(직접 구현 PCG, 고정 tick). 고정소수점 전환은 보류하되 `float` 사용 범위를 sim 내부에 가둔다. 컴파일러 옵션 `/fp:precise`(MSVC), `-ffp-contract=off`(GCC) 고정 |
 | 플랫폼 (B4) | Windows 먼저, 이후 Linux | |
-| UI (B5) | `bevy_ui` | |
+| UI (B5) | ~~`bevy_ui`~~ → raygui `[가정: C++]` | |
 | 지도 범위 (C1) | 최소 300 km × 300 km부터. 최대 지구 규모는 나중 | 지구 규모에서는 UTM 단일 투영 불가 → 나중에 좌표계 재설계 필요 (메모) |
 | 격자 (C2) | 정사각 1 km, 렌더링 연속 | 4.5 유지 |
 | QGIS (C3, C4) | `.gpkg` 입력, 화면은 래스터 | |
@@ -397,14 +415,14 @@ basemap 래스터와 벡터 데이터는 **반드시 같은 투영·범위로** 
 | 경제 (G1~G4) | 생산 + 징발만, 화폐 없음. 신규 사단 생산 가능(물자·시간 소모). 인구·노동력·난민 있음 | |
 | 적 AI (H1) | **GOAP + HTN** | |
 | 작업 방식 (H2) | **마일스톤 하나마다 사람 검토·승인 후 다음 진행** | |
-| git (H3) | 루트 git, `bevy/`는 `.gitignore` | `milsymbol/`도 같은 방식 |
-| APP-6 (H4) | **milsymbol** (JS) 사용 | 런타임은 Rust이므로 milsymbol로 SVG/PNG를 미리 생성하는 오프라인 단계 필요 (방법은 M9에서 확정) |
+| git (H3) | 루트 git. 외부 소스(`milsymbol/` 등)는 `.gitignore` | 라이브러리는 CMake가 받아 오고 저장소에 넣지 않는다 |
+| APP-6 (H4) | **milsymbol** (JS) 사용 | 런타임은 C++이므로 milsymbol로 PNG를 미리 생성하는 오프라인 단계 필요 (5.4) |
 
 ### 추가 확정 (열린 질문 답변)
 
 | 항목 | 결정 | 설계 영향 |
 |---|---|---|
-| Lua 범위 | 시나리오 + 샌드박스 유닛 설정 + 지도 설정. 규칙 공식은 Rust 코어에 둔다 | Lua는 데이터 정의 계층. 런타임은 **`mlua` 확정** |
+| Lua 범위 | 시나리오 + 샌드박스 유닛 설정 + 지도 설정. 규칙 공식은 C++ 코어에 둔다 | Lua는 데이터 정의 계층. 런타임은 ~~`mlua`~~ → Lua 5.4 + sol2 `[가정: C++]` |
 | 승리 조건 | 선택 적용. "동화", 군사적 목표, 승리 조건 없음 중 시나리오/샌드박스 설정에서 고른다 | `VictoryCondition` 목록을 시나리오 데이터로. 코어는 평가 시스템만 제공 |
 | 날씨·계절·낮밤 (D6) | 하루 = 게임 시간 24시간(낮밤 주기). 계절의 수·길이·효과는 **Lua(시나리오)에서 설정** | `SimClock`은 tick → 시각·날짜만 계산. 계절은 Lua가 준 달력 테이블로 판정. 이동·전투 계수에 낮밤/계절 반영 |
 ---
@@ -440,7 +458,7 @@ basemap 래스터와 벡터 데이터는 **반드시 같은 투영·범위로** 
 
 ### 12.3 군사 통제 계산 `[가정]`
 
-- 주기: 5분 (Combat 세트와 같은 주기, 전투 뒤).
+- 주기: 5분 (Combat 단계와 같은 주기, 전투 뒤).
 - 각 부대가 반경 `[가정: 10 km]` 셀에 통제력을 행사.
 - 셀에 한 진영 부대의 통제력만 닿으면 → 그 진영. 양쪽이 닿으면 → 이전 값 유지 (교전 중). 아무도 없으면 → 이전 값 유지 (통제는 다른 진영이 들어올 때까지 남는다).
 - 초기값 = 법적 영토.
@@ -465,7 +483,7 @@ Territory.legal ─▶ Economy 생산 귀속, 동화(A6) 진행 대상
 ### 12.6 구현 범위 제안 (M4b)
 
 1. `mapdata`: `regions` 목록 + 셀별 `RegionId` 격자. 테스트 지도에 지역 9개(3×3, 개념도처럼 불규칙 경계).
-2. `sim`: `Territory` 리소스 (`legal`, `military`), 군사 통제 갱신 시스템, 지역 상태 판정 함수.
+2. `sim`: `Territory` (`registry.ctx()`, `legal`, `military`), 군사 통제 갱신 시스템, 지역 상태 판정 함수.
 3. `sim`: 보급 간선 controller 반영 (전선 너머 철도는 못 씀).
 4. `app`: 오버레이 3종 + 전선 표시.
 5. 테스트: 부대 이동 → 셀 통제 변화, 점령지 판정, 적 통제 간선 보급 차단.
@@ -483,7 +501,7 @@ Territory.legal ─▶ Economy 생산 귀속, 동화(A6) 진행 대상
 - 붉은 사각형(방어 측)은 뒤로 밀리고, 일부(Uman 부근 16·24)는 전선 안쪽에 갇힌다 → **포위망(pocket)**.
 - 즉 "이기고 있으면 목표 쪽으로 계속 전진, 지고 있으면 계속 후퇴"가 전선을 움직이고, 그 결과 포위가 생긴다.
 
-현재 구현(M5)은 접촉한 부대가 그 자리에서 손실만 주고받는다. 이 장은 **교전의 승패가 위치를 바꾸게** 한다. 전선(12.3 군사 통제)은 부대 위치로 이미 자동 갱신되므로, 부대가 움직이기만 하면 전선이 따라 움직인다.
+M5 동작은 접촉한 부대가 그 자리에서 손실만 주고받는다. 이 장은 **교전의 승패가 위치를 바꾸게** 한다. 전선(12.3 군사 통제)은 부대 위치로 이미 자동 갱신되므로, 부대가 움직이기만 하면 전선이 따라 움직인다.
 
 ### 13.1 교전 우세 판정
 
@@ -496,12 +514,12 @@ Territory.legal ─▶ Economy 생산 귀속, 동화(A6) 진행 대상
 | R | 판정 | 결과 |
 |---|---|---|
 | R ≥ `[가정: 1.5]` | 우세 | 공격 명령이 있으면 목표 쪽으로 전진 계속 |
-| `[가정: 0.67]` < R < 1.5 | 교착 | 제자리 소모전 (현재 M5 동작) |
+| `[가정: 0.67]` < R < 1.5 | 교착 | 제자리 소모전 (M5 동작) |
 | R ≤ 0.67 | 열세 | 적 반대 방향으로 후퇴 |
 
 ### 13.2 전진 (공격 측)
 
-- 공격 = 목표(지점 또는 지역)가 있는 이동 명령 (`SimCommand::Attack { unit, goal }`).
+- 공격 = 목표(지점 또는 지역)가 있는 이동 명령 (`AttackCommand { unit, goal }`).
 - 접촉 중 우세하면 이동을 멈추지 않고 **감속 전진**: 속도 × `[가정: 0.2 + 0.2 × (R − 1.5), 최대 0.6]`.
 - 교착이면 멈춘다 (명령은 유지 → 우세가 되면 다시 전진).
 - 열세면 공격 명령이 취소되고 후퇴 규칙(13.3)을 따른다.
@@ -536,8 +554,8 @@ Supply(탄약·연료 0) ──▶ Combat 화력 ▼ ──▶ 열세 ──▶ 
 
 ### 13.6 구현 범위 제안 (M5b)
 
-1. `sim`: `Organization` 컴포넌트, 교전 우세비 계산(현재 `resolve_combat` 확장).
-2. `sim`: `SimCommand::Attack { unit, goal }`, 우세 시 감속 전진 / 교착 시 정지.
+1. `sim`: `Organization` 컴포넌트, 교전 우세비 계산(`resolve_combat` 확장).
+2. `sim`: `AttackCommand { unit, goal }`, 우세 시 감속 전진 / 교착 시 정지.
 3. `sim`: 후퇴 상태와 후퇴 이동 (아군 통제 칸 방향).
 4. `sim`: 포위 판정(flood fill), 포위 시 트럭 보급 차단.
 5. `app`: 공격 명령 입력(예: Shift + 우클릭), 후퇴·포위 표시.
@@ -552,17 +570,18 @@ Supply(탄약·연료 0) ──▶ Combat 화력 ▼ ──▶ 열세 ──▶ 
 - 후퇴를 플레이어가 막을 수 있는지 ("사수 명령": 후퇴하지 않는 대신 손실 증가).
 = 예. 후퇴를 플레이어가 막을수 있다.
 
-### 13.8 M5b 구현 내용 (13.7 답 반영)
+### 13.8 M5b 구현 내용 (13.7 답 반영, Rust 구현 — C++ 이전 대상)
 
 - 우세비 R = 이번 5분 단계에 **준 손실 ÷ 받은 손실**. 화력에는 조직도 `(0.3 + 0.7 × 조직도)`, 보급(탄약 계수 × 식량 계수 `0.5 + 0.5 × 식량/목표`), 후퇴 중 ×0.5가 들어간다. 탄약 소비는 탄약 계수로 반영된다.
-- 별도 공격 명령 없음: `Move` 중 접촉하면 R에 따라 감속 전진 / 정지(명령 유지) / 명령 취소 후 후퇴.
-- `SimCommand::SetHold { unit, hold }` (앱: G 키): 후퇴하지 않고, 졌을 때 손실 ×1.3.
+- 별도 공격 명령 없음: `MoveCommand` 중 접촉하면 R에 따라 감속 전진 / 정지(명령 유지) / 명령 취소 후 후퇴.
+- `SetHoldCommand { unit, hold }` (앱: G 키): 후퇴하지 않고, 졌을 때 손실 ×1.3.
 - 조직도: 받은 손실 1 대대당 −0.8 (후퇴 중 ×1.5), 접촉이 없고 포위되지 않았으면 하루 +0.2.
 - 후퇴: R ≤ 0.67 또는 조직도 < 0.25. 이미 후퇴 중이면 조직도 0.5 회복 전까지 계속. 접촉이 끊기면 멈춘다. 방향은 적 반대쪽 + 가장 가까운 아군 보급소 쪽(가중 0.5). 아군 통제 육지 칸으로만 이동하고, 막히면 ±45°, ±90°로 꺾는다.
 - 포위: 1시간마다 진영별 flood fill (4방향, 아군 통제 칸). 보급소·기지가 하나도 없는 진영은 포위 판정 대상이 아니다. 포위 시 트럭 보급 0, 보충병 0, 후퇴 불가, 손실 ×1.5, 조직도 회복 없음.
-## 14. 시나리오 에디터 (샌드박스, 구현됨)
 
-게임 안에서 시작 상황을 편집하는 도구. 지형과 수송망은 QGIS에서만 만들고, 에디터는 `ScenarioData`(부대·보급소·기지·지역 소유)만 바꾼다. 코드: `game/crates/app/src/editor.rs`.
+## 14. 시나리오 에디터 (샌드박스, Rust 구현됨 — C++ 이전 대상)
+
+게임 안에서 시작 상황을 편집하는 도구. 지형과 수송망은 QGIS에서만 만들고, 에디터는 `ScenarioData`(부대·보급소·기지·지역 소유)만 바꾼다. Rust 코드: `game/crates/app/src/editor.rs` → C++: `game/src/app/editor.cpp` `[가정: C++]`.
 
 - **전환:** 상단 `Editor` 버튼을 누르면 시나리오 시작 상태(tick 0)로 되돌아가 정지한다. `> Play`를 누르면 그 상태에서 게임이 진행된다. 진행 중에 `Editor`로 돌아가면 진행 상황은 버려지고 시작 상태로 돌아온다.
 - **도구 (왼쪽 패널, 진영 Blue/Red 선택):**
@@ -573,8 +592,8 @@ Supply(탄약·연료 0) ──▶ Combat 화력 ▼ ──▶ 열세 ──▶ 
   - 점령: 군사 통제만 바꾼다.
   - 삭제
 - **오른쪽 패널:** 선택한 부대의 진영 바꾸기와 삭제(`Del` 키도 가능). 기지가 없는 진영이 있으면 경고를 띄운다.
-- **저장:** `File > Save scenario (.ron)` 또는 에디터 패널의 같은 버튼. 지도와 시나리오를 함께 `.ron`으로 저장하고, `File > Open`으로 다시 열 수 있다.
-- **구현:** 편집할 때마다 `Editor::baked`를 고치고 `sim::load_scenario`로 시뮬레이션을 다시 만든다. 따라서 화면은 항상 정확한 시작 상태다. 카메라는 지도 파일을 새로 열 때(`MapVersion`)만 다시 맞춘다.
+- **저장:** `File > Save scenario` 또는 에디터 패널의 같은 버튼. 지도와 시나리오를 함께 저장하고(Rust `.ron`, C++ JSON `[가정: C++]`), `File > Open`으로 다시 열 수 있다.
+- **구현:** 편집할 때마다 `Editor::baked`를 고치고 `sim::load_scenario`로 시뮬레이션(`entt::registry`)을 다시 만든다. 따라서 화면은 항상 정확한 시작 상태다. 카메라는 지도 파일을 새로 열 때(`MapVersion`)만 다시 맞춘다.
 - **아직 없는 것:**
   - 사단 편성 선택(모두 표준 사단)
   - 부대 이름 입력
@@ -582,9 +601,9 @@ Supply(탄약·연료 0) ──▶ Combat 화력 ▼ ──▶ 열세 ──▶ 
   - 보급량과 생산량 편집
   - 트리거와 목표
 
-## 15. 사단 내부 대대 가상 배치 (구현됨, 수치는 `[가정]`)
+## 15. 사단 내부 대대 가상 배치 (Rust 구현됨 — C++ 이전 대상, 수치는 `[가정]`)
 
-사단은 여전히 엔티티 하나다. 다만 대대 목록을 자세에 따라 역할에 배치한 것으로 계산해서, 사단이 지도 위에서 **선분**(정면폭 × 방향)처럼 행동하게 한다. 코드: `sim/src/deploy.rs`, `combat.rs`.
+사단은 여전히 엔티티 하나다. 다만 대대 목록을 자세에 따라 역할에 배치한 것으로 계산해서, 사단이 지도 위에서 **선분**(정면폭 × 방향)처럼 행동하게 한다. Rust 코드: `sim/src/deploy.rs`, `combat.rs` → C++: `game/src/sim/deploy.cpp`, `combat.cpp` `[가정: C++]`.
 
 - **자세(Posture):** 자동으로 정한다(5분마다).
 
@@ -625,7 +644,7 @@ Supply(탄약·연료 0) ──▶ Combat 화력 ▼ ──▶ 열세 ──▶ 
   - 결과적으로 예비는 보존된다.
 - **군사 통제:** 사단 선분에서 10 km 안의 셀을 통제한다. 따라서 넓은 방어선은 넓은 땅을 막는다.
 - **화면:**
-  - 진영 색 선분이 정면폭이다.
+  - 진영 색 선분이 정면폭이다 (`DrawLineEx`).
   - 짧은 선은 방향, 옅은 선은 종심이다.
   - 오른쪽 패널의 DEPLOYMENT에 자세, 정면폭·종심, 역할별 대대 수를 보여준다.
 - **아직 없는 것:**

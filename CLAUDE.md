@@ -1,41 +1,36 @@
-# CLAUDE.md
+# Modern C++20 작성규칙(필수로 읽기)
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+1. 스마트 포인터는 진짜 필요할때만 쓰고 가급적 사용하지 않는다.
+2. std::vector을 최대한 활용한다.
+3. C언어에 쓰이는 malloc, free, gets_s, scanf같은 문법을 절떄 쓰지 않는다 만약 쓴다면 STL에서 찾아서 써라.
+4. template, constexpr, inline, concept는 사용 가능하다.
+5. class를 쓸떄는 상속 기반 다형성, 과도한 객체지향 계층 구조, 불필요한 추상화 같은 과도한 OOP요소를 금지하며 오직 class는
+```cpp
+class Example
+{
+public:
+    void Test();
+    void Test2();
 
-## Project state
-
-RealRTS: 2D real-time operational wargame (Rust + Bevy). Graphics are only QGIS-derived maps and NATO APP-6 symbols; depth comes from interacting simulation systems (frontline, supply network, rear-area partisans, partial economy).
-
-- `chat.md` — original design discussion (Korean).
-- `architect.md` — design draft derived from `chat.md`. **Draft under human review**; items marked `[가정]` and section 9 are undecided. Do not treat them as final.
-- `ai_ask.md` — user's answers to design questions; summarized in `architect.md` section 11, which overrides the rest of that doc.
-- `bevy/` — Bevy **0.19.0** engine source, used as a **path dependency** by `game/`. Edit engine code only when unavoidable. Use it and `bevy/examples/` to check API usage instead of guessing; Bevy APIs change between versions. Untracked by git.
-- `milsymbol/` — JS APP-6 symbol library clone, untracked. Planned for offline symbol generation.
-- `game/` — Cargo workspace (`crates/sim`, `crates/app`, `crates/mapdata`, `crates/mapbake`). Layout plan in `architect.md` section 3.
-- Workflow: one milestone (architect.md section 8) at a time; stop for user review and approval before starting the next.
-
-## Architecture rules (from architect.md)
-
-- `sim` crate depends on `bevy_ecs` only, no rendering; must run headless in tests. `app` reads sim state read-only and writes only via `SimCommand`.
-- Sim runs in `FixedUpdate`, 1 tick = 1 game minute. Speed-up = more ticks per frame, never a larger tick. Each system runs on its own cadence (move 1, combat 5, supply 60, partisan 360, economy 1440 ticks) in a fixed order.
-- Systems never call each other; they interact through shared state (e.g. partisans raise `Edge.damage`, supply reads effective capacity).
-- Units/depots are ECS entities; terrain grid, transport graph, regions, nations are plain Rust `Resource`s. Cross-reference by index IDs (`NodeId`, `RegionId`), not `Entity`.
-- Deterministic: seeded `rand_chacha`; save/replay = seed + scenario + `(tick, SimCommand)` log.
-- Game coordinates: one projected metric CRS per scenario (meters, x east, y north). Projection happens only offline in `tools/mapbake`.
-- Work in milestone-sized steps (architect.md section 8), each with tests (supply conservation and capacity invariants are mandatory).
-
-## Commands
-
-Run from `game/`:
-
+private:
+    Example_2 example2;
+};
 ```
-cargo run -p app                         # game (built-in test map)
-cargo run -p app -- samples/sample.gpkg  # game on a QGIS map (.gpkg, layer folder of .geojson/.shp, or baked .ron)
-cargo test --workspace                   # all tests
-cargo test -p sim <name>                 # single test
-cargo run -p mapbake -- in.gpkg out.ron  # bake offline (input: .gpkg or a .geojson/.shp layer folder)
-python tools/sample_gpkg.py              # regenerate samples/sample.gpkg and samples/geojson/
-node tools/symbols/gen.mjs               # regenerate APP-6 SVGs (needs ../milsymbol)
-```
+와 같이 즉 의미를 명확히 하기위한 용도로만 사용이 가능하다.
 
-QGIS layer contract and symbol pipeline: `architect.md` 5.4 (overrides 5.2/5.3).
+6. 하나의 class가 비대하게 커지는 God class를 절떄금지한다. 
+7. RAII와 Move Semantics의 사용을 강력하게 허락한다.
+8. operator는 의미가 진짜 초등학생도 봤을떄 명확할정도에만 사용이 가능하며 이 외에 경우에는 절때쓰지 않는다.
+
+# 마지막으로 가장중요한것.
+
+무조껀 애매하다 생각하면 
+예시: "초등학생도 이해할정도가 뭐지?" or "스마트 포인터를 지금 써도 되나...?"
+
+절떄로 너 혼자 자체적으로 판단하지 말고 코드를 보여주고 나한태서 답변을 기다려라
+
+# AI툴 관련
+
+너가 가동되는 툴은 항상 Herdr이라는것을 명심해라.
+그리고 Codex와의 협력도 가능하다.
+OpenCode Go Gemini 4 Argon과 협력이 가능하다.

@@ -4,3 +4,5 @@
 /milsymbol/
 target/
 /game/example_geodata/cargo_target
+# CMake build output
+/game/build/
