@@ -67,6 +67,18 @@ void apply_commands(entt::registry& world) {
                 order_division(command.side, std::move(command.name), ctx.get<SimClock>().tick,
                                ctx.get<SupplyBases>(), ctx.get<Nations>(), ctx.get<EconomyState>(),
                                ctx.get<EventLog>());
+            } else if constexpr (std::is_same_v<Command, SimCommand::SetFront>) {
+                if (auto* corps = find_corps(world, command.corps)) set_front(world, *corps, std::move(command.points));
+            } else if constexpr (std::is_same_v<Command, SimCommand::SetFrontAttack>) {
+                auto* corps = find_corps(world, command.corps);
+                if (!corps || !corps->front) return;
+                corps->front->attack = command.attack;
+                // Defend: stop where they are instead of finishing the last push.
+                if (!command.attack) {
+                    for (const UnitId id : corps->members) {
+                        if (const auto e = find_unit(id); e != entt::null) world.remove<MoveOrder>(e);
+                    }
+                }
             }
         }, cmd.value);
     }

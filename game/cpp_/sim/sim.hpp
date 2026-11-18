@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sim/combat.hpp"
+#include "sim/corps.hpp"
 #include "sim/deploy.hpp"
 #include "sim/economy.hpp"
 #include "sim/front.hpp"

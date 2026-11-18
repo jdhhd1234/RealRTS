@@ -110,3 +110,27 @@ TEST_CASE("test map has nine regions all used") {
     CHECK(m.region_at(299, 299) == RegionId{8});
     CHECK(m.region_at(150, 150) == RegionId{4});
 }
+
+TEST_CASE("corps_need_2_to_5_divisions_of_their_side") {
+    Baked b = test_baked();
+    b.scenario.corps.push_back({0, "I Corps", {0, 1}});
+    CHECK_NOTHROW(b.validate());
+    CHECK(Baked::from_json(b.to_json()) == b);
+
+    Baked one = b;
+    one.scenario.corps[0].units = {0};
+    CHECK_THROWS_AS(one.validate(), MapError);
+    Baked enemy = b;
+    enemy.scenario.corps[0].units = {0, 2};  // unit 2 is red
+    CHECK_THROWS_AS(enemy.validate(), MapError);
+    Baked twice = b;
+    twice.scenario.corps.push_back({0, "II Corps", {1, 0}});
+    CHECK_THROWS_AS(twice.validate(), MapError);
+
+    // Files saved before corps existed have no "corps" key.
+    std::string old = test_baked().to_json();
+    const auto at = old.find(",\"corps\":[]");
+    REQUIRE(at != std::string::npos);
+    old.erase(at, std::string(",\"corps\":[]").size());
+    CHECK(Baked::from_json(old).scenario.corps.empty());
+}

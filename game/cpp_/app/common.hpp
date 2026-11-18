@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "sim/sim.hpp"
 
@@ -28,6 +29,9 @@ struct Play {
     bool show_network = true;
     OverlayMode overlay = OverlayMode::Military;
     std::uint32_t raised = 0;  // counter for new division names
+    // Corps whose front line is being drawn, and the points so far (world meters).
+    std::optional<std::uint32_t> front_corps;
+    std::vector<mapdata::Pos> front_draft;
 
     // Order for a new player division with the next free name.
     sim::SimCommand raise_order();

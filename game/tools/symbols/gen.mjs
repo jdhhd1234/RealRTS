@@ -14,6 +14,7 @@ const kinds = {
   partisan: ["10", "00", "121100"], // shortcut: no guerrilla icon chosen yet; echelon-less infantry
   depot: ["10", "00", "163400"], // sustainment / supply
   base: ["20", "00", "111200"], // installation: military materiel facility (supply)
+  corps: ["10", "22", "110000"], // command and control, echelon XXX (corps)
 };
 const out = new URL("../../assets/symbols/svg/", import.meta.url);
 mkdirSync(out, { recursive: true });

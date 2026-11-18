@@ -94,3 +94,26 @@ TEST_CASE("drawn_line_snaps_to_nodes_and_adds_edges") {
     CHECK(app::add_line(m, again, mapdata::EdgeKind::Road, 100.0f) == 1);
     m.validate();
 }
+
+TEST_CASE("editor_corps_follow_unit_edits") {
+    app::Editor ed(mapdata::test_baked());  // units 0, 1 blue; 2 red
+    ed.on = true;
+    ed.corps_draft = {0, 1};
+    ed.create_corps();
+    REQUIRE(ed.baked.scenario.corps.size() == 1);
+    CHECK(ed.baked.scenario.corps[0].name == "Blue Corps 1");
+    CHECK(ed.corps_draft.empty());
+    ed.baked.validate();
+
+    // Deleting a unit shifts the indices after it; flipping a member of a 2-unit corps disbands it.
+    ed.baked.scenario.units.push_back({0, "Extra", ed.baked.scenario.units[0].pos});
+    std::optional<sim::UnitId> sel;
+    ed.delete_unit(2, sel);  // red division: index 3 becomes 2
+    ed.baked.scenario.corps[0].units.push_back(2);
+    ed.baked.validate();
+    ed.delete_unit(0, sel);
+    CHECK(ed.baked.scenario.corps[0].units == std::vector<std::uint32_t>{0, 1});
+    ed.flip_side(0);
+    CHECK(ed.baked.scenario.corps.empty());  // one division left: disbanded
+    ed.baked.validate();
+}

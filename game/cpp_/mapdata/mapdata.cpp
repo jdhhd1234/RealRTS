@@ -54,7 +54,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Region, name, daily_output)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(MapData, name, terrain, graph, regions, region_cells)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SideNode, side, node)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UnitSpec, side, name, pos)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ScenarioData, legal, control, bases, depots, units)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CorpsSpec, side, name, units)
+// WITH_DEFAULT: files saved before corps existed have no "corps" key.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ScenarioData, legal, control, bases, depots, units, corps)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Baked, map, scenario)
 
 namespace {
@@ -198,6 +200,19 @@ void Baked::validate() const {
     for (const UnitSpec& u : s.units) {
         if (!map.terrain.cell_at(u.pos)) {
             throw MapError(MapErrorKind::Scenario, "unit " + u.name + " outside the map");
+        }
+    }
+    std::vector<bool> in_corps(s.units.size());
+    for (const CorpsSpec& c : s.corps) {
+        if (c.units.size() < CORPS_MIN || c.units.size() > CORPS_MAX) {
+            throw MapError(MapErrorKind::Scenario, "corps " + c.name + " must have 2 to 5 divisions");
+        }
+        for (const std::uint32_t i : c.units) {
+            if (i >= s.units.size() || in_corps[i] || s.units[i].side != c.side) {
+                throw MapError(MapErrorKind::Scenario,
+                               "corps " + c.name + ": missing, repeated or other-side division");
+            }
+            in_corps[i] = true;
         }
     }
 }

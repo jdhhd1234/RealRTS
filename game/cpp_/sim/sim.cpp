@@ -17,7 +17,7 @@ void configure(Schedule& schedule) {
     schedule.stages = {
         {Clock, 1, {advance_clock}},
         {Commands, cadence::COMMANDS, {apply_commands}},
-        {Movement, cadence::MOVEMENT, {move_units, retreat_units}},
+        {Movement, cadence::MOVEMENT, {front_lines, move_units, retreat_units}},
         {Combat, cadence::COMBAT, {resolve_combat, update_military, capture_depots}},
         {Supply, cadence::SUPPLY, {detect_pockets, consume, receive, dispatch, deliver}},
         {Partisan, cadence::PARTISAN, {partisan_step}},
@@ -50,6 +50,7 @@ void init_world(entt::registry& world, mapdata::MapData map) {
     const auto regions = map.regions.size();
     ctx.insert_or_assign(SimClock{});
     ctx.insert_or_assign(CommandQueue{});
+    ctx.insert_or_assign(CorpsList{});
     ctx.insert_or_assign(SupplyBases{});
     ctx.insert_or_assign(Pipeline{});
     ctx.insert_or_assign(Ledger{});
@@ -87,6 +88,14 @@ void load_scenario(entt::registry& world, mapdata::Baked baked) {
         bases.push_back({side, node, stock});
     }
     for (const auto& [side, node] : scenario.depots) depot(world, side, node);
+
+    // Division ids are scenario index + 1; corps ids likewise.
+    auto& corps = ctx.get<CorpsList>().value;
+    for (std::size_t i = 0; i < scenario.corps.size(); ++i) {
+        const auto& c = scenario.corps[i];
+        Corps& made = corps.emplace_back(Corps{static_cast<std::uint32_t>(i + 1), c.side, c.name, {}, std::nullopt});
+        for (const std::uint32_t u : c.units) made.members.push_back(UnitId{u + 1});
+    }
 
     std::uint32_t id = 1;
     for (const auto& u : scenario.units) {

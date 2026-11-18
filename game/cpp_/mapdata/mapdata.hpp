@@ -130,6 +130,17 @@ struct UnitSpec {
     bool operator==(const UnitSpec&) const = default;
 };
 
+// Corps (XXX): 2-5 divisions of one side under one command.
+inline constexpr std::size_t CORPS_MIN = 2;
+inline constexpr std::size_t CORPS_MAX = 5;
+
+struct CorpsSpec {
+    std::uint8_t side = 0;
+    std::string name;
+    std::vector<std::uint32_t> units;  // indices into `ScenarioData::units`, in order along the front
+    bool operator==(const CorpsSpec&) const = default;
+};
+
 // Starting situation that comes with a map (QGIS attributes today; Lua scenarios later).
 struct ScenarioData {
     // Legal owner per region (same order as `MapData::regions`).
@@ -139,6 +150,7 @@ struct ScenarioData {
     std::vector<SideNode> bases;   // supply bases
     std::vector<SideNode> depots;  // field depots
     std::vector<UnitSpec> units;
+    std::vector<CorpsSpec> corps;  // each unit in at most one corps
     bool operator==(const ScenarioData&) const = default;
 };
 

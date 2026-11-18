@@ -187,6 +187,28 @@ void speed_controls(Play& play) {
     }
 }
 
+// Front line drawing for a corps: LMB adds a point, Backspace drops the last, Esc cancels,
+// Enter or RMB sends it. Returns false when not drawing (normal mouse orders apply).
+bool front_drawing(entt::registry& world, Play& play, const Camera2D& cam, bool over_ui) {
+    if (!play.front_corps) return false;
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        play.front_corps.reset();
+        play.front_draft.clear();
+        return true;
+    }
+    if (IsKeyPressed(KEY_BACKSPACE) && !play.front_draft.empty()) play.front_draft.pop_back();
+    if (IsKeyPressed(KEY_ENTER) || (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && !over_ui)) {
+        if (play.front_draft.size() >= 2) push(world, {sim::SimCommand::SetFront{*play.front_corps, std::move(play.front_draft)}});
+        play.front_corps.reset();
+        play.front_draft.clear();
+        return true;
+    }
+    const mapdata::Pos p = cursor_world(cam);
+    const auto& m = world.ctx().get<sim::Map>().value;
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !over_ui && m.terrain.cell_at(p)) play.front_draft.push_back(p);
+    return true;
+}
+
 // Left click: select own unit. Right click: order the selected unit to move there.
 void mouse_orders(entt::registry& world, Play& play, const Camera2D& cam, bool over_ui) {
     if (over_ui) return;
@@ -322,6 +344,50 @@ void draw_symbols(const entt::registry& world, const Editor& ed, const Symbols& 
         if (ed.drag && id.value == *ed.drag + 1) p = ed.drag_pos;
         symbols.draw(side.value, kind, screen(p), partisan ? SYMBOL_PX * 0.75f : SYMBOL_PX);
     }
+    // Corps symbol above the middle of its divisions.
+    for (const auto& c : world.ctx().get<sim::CorpsList>().value) {
+        Vector2 sum{0, 0};
+        int n = 0;
+        for (auto [e, id, pos] : world.view<const sim::UnitId, const sim::Position>().each()) {
+            if (std::ranges::find(c.members, id) == c.members.end()) continue;
+            sum = Vector2Add(sum, screen(pos.value));
+            ++n;
+        }
+        if (n == 0) continue;
+        const Vector2 at = Vector2Scale(sum, 1.0f / static_cast<float>(n));
+        symbols.draw(c.side, Kind::Corps, {at.x, at.y - SYMBOL_PX * 1.4f}, SYMBOL_PX);
+    }
+}
+
+// Own corps front lines (with teeth toward the enemy) and the line being drawn.
+void draw_fronts(const entt::registry& world, const Play& play, mapdata::Pos cursor, float px) {
+    for (const auto& c : world.ctx().get<sim::CorpsList>().value) {
+        if (c.side != PLAYER_SIDE || !c.front) continue;
+        const auto& f = *c.front;
+        const Color col = f.attack ? Color{230, 120, 30, 255} : FRIENDLY;
+        for (std::size_t i = 1; i < f.points.size(); ++i) {
+            const mapdata::Pos a = f.points[i - 1], b = f.points[i];
+            DrawLineEx(to_draw(a), to_draw(b), 3.0f * px, col);
+            const float len = std::hypot(b.x - a.x, b.y - a.y);
+            if (len <= 0.0f) continue;
+            const float dx = (b.x - a.x) / len, dy = (b.y - a.y) / len;
+            const float nx = f.flip ? dy : -dy, ny = f.flip ? -dx : dx;  // toward the enemy
+            for (float s = 8.0f * px; s < len; s += 16.0f * px) {
+                const mapdata::Pos base{a.x + dx * s, a.y + dy * s};
+                const mapdata::Pos tip{base.x + nx * 7.0f * px, base.y + ny * 7.0f * px};
+                DrawTriangle(to_draw({base.x - dx * 4.0f * px, base.y - dy * 4.0f * px}), to_draw(tip),
+                             to_draw({base.x + dx * 4.0f * px, base.y + dy * 4.0f * px}), col);
+                DrawTriangle(to_draw({base.x + dx * 4.0f * px, base.y + dy * 4.0f * px}), to_draw(tip),
+                             to_draw({base.x - dx * 4.0f * px, base.y - dy * 4.0f * px}), col);  // either winding
+            }
+        }
+    }
+    if (!play.front_corps) return;
+    for (std::size_t i = 0; i < play.front_draft.size(); ++i) {
+        const auto next = i + 1 < play.front_draft.size() ? play.front_draft[i + 1] : cursor;
+        DrawLineEx(to_draw(play.front_draft[i]), to_draw(next), 2.0f * px, YELLOW);
+        DrawCircleV(to_draw(play.front_draft[i]), 3.0f * px, YELLOW);
+    }
 }
 
 // Combat links, pockets, retreats, selection ring and remaining path, drawn over the symbols.
@@ -364,6 +430,9 @@ void draw_markers(const entt::registry& world, const Play& play, float px) {
 // Editor markers: every node, and the shape or line being drawn (rubber band to the cursor).
 void draw_editor(const Editor& ed, const mapdata::MapData& m, mapdata::Pos cursor, float px) {
     for (const auto& n : m.graph.nodes) DrawCircleLinesV(to_draw(n.pos), 4.0f * px, BLACK);
+    for (const std::size_t i : ed.corps_draft) {
+        DrawCircleLinesV(to_draw(ed.baked.scenario.units[i].pos), SYMBOL_PX * 0.8f * px, YELLOW);
+    }
     if (ed.draft.empty()) return;
     const Color side = ed.side == PLAYER_SIDE ? FRIENDLY : ENEMY;
     if (ed.tool == Tool::Circle) {
@@ -432,6 +501,8 @@ int run(int argc, char** argv) {
                     editor.set_source(*msg->baked);
                     sim::load_scenario(world, std::move(*msg->baked));
                     play.selected.reset();
+                    play.front_corps.reset();
+                    play.front_draft.clear();
                     play.paused = true;
                     map_changed = true;
                 } else if (msg->text.empty()) {
@@ -465,7 +536,7 @@ int run(int argc, char** argv) {
                 editor.edit_mouse(in, m, play.selected);
             } else {
                 speed_controls(play);
-                mouse_orders(world, play, cam, over_ui);
+                if (!front_drawing(world, play, cam, over_ui)) mouse_orders(world, play, cam, over_ui);
                 unit_keys(world, play);
                 region_keys(world, play, cam, over_ui);
             }
@@ -497,6 +568,7 @@ int run(int argc, char** argv) {
             terrain.draw(m.terrain);
             overlay.draw(m.terrain);
             draw_network(world, play, px);
+            draw_fronts(world, play, cursor_world(cam), px);
             EndMode2D();
             draw_symbols(world, editor, symbols, cam);
             BeginMode2D(cam);

@@ -15,9 +15,9 @@ namespace app {
 // On-screen symbol height in pixels.
 inline constexpr float SYMBOL_PX = 34.0f;
 
-enum class Kind { Infantry, Armor, Artillery, Partisan, Depot, Base };
+enum class Kind { Infantry, Armor, Artillery, Partisan, Depot, Base, Corps };
 
-inline constexpr std::array<const char*, 6> KIND_FILES{"infantry", "armor", "artillery", "partisan", "depot", "base"};
+inline constexpr std::array<const char*, 7> KIND_FILES{"infantry", "armor", "artillery", "partisan", "depot", "base", "corps"};
 
 // Owns one GPU texture. Move-only so the texture is unloaded exactly once.
 class Texture {

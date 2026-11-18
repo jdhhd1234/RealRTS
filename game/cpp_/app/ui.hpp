@@ -52,6 +52,11 @@ enum class ActionKind {
     EditFlip,
     EditDelete,
     SaveScenario,
+    CreateCorps,
+    LeaveCorps,
+    DrawFront,       // index = corps id
+    FrontAttack,     // index = corps id, flag = attack
+    ClearFront,      // index = corps id
 };
 
 struct Action {

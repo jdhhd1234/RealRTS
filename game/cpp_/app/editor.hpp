@@ -1,6 +1,7 @@
 #pragma once
 // Scenario editor (sandbox): place / drag / delete divisions, toggle depots and supply bases on
-// nodes, set region owners, draw new regions (polygon or circle) and rail / road lines.
+// nodes, set region owners, draw new regions (polygon or circle) and rail / road lines, group
+// divisions into corps (2-5 each; corps are only made here, fronts are drawn in play).
 // Edits change `Editor::baked` (map + scenario source) and the sim is reloaded from it, so the map
 // always shows the exact start state. Play runs from that state; going back to the editor restores it.
 // Terrain comes from QGIS and is not edited.
@@ -19,6 +20,7 @@ namespace app {
 enum class Tool {
     Select,
     Division,
+    Corps,  // click divisions of the chosen side, then Create corps
     Depot,
     Base,
     Region,  // legal owner and controller of the region under the cursor
@@ -30,9 +32,10 @@ enum class Tool {
     Delete,
 };
 
-inline constexpr std::array<std::pair<Tool, const char*>, 11> TOOLS{{
+inline constexpr std::array<std::pair<Tool, const char*>, 12> TOOLS{{
     {Tool::Select, "Select / drag unit"},
     {Tool::Division, "Place division"},
+    {Tool::Corps, "Build corps"},
     {Tool::Depot, "Depot on node (toggle)"},
     {Tool::Base, "Supply base on node (toggle)"},
     {Tool::Region, "Region owner"},
@@ -70,6 +73,9 @@ public:
     std::optional<std::size_t> selected_index(const std::optional<sim::UnitId>& selected) const;
     void delete_unit(std::size_t i, std::optional<sim::UnitId>& selected);
     void flip_side(std::size_t i);
+    // Makes a corps of `corps_draft` (2-5 divisions of the chosen side).
+    void create_corps();
+    void leave_corps(std::size_t i);
     // Rebuilds the sim from the edited scenario when something changed (tick 0, paused). True if it did.
     bool apply_edits(entt::registry& world);
     void edit_mouse(const EditInput& in, const mapdata::MapData& m, std::optional<sim::UnitId>& selected);
@@ -85,6 +91,7 @@ public:
     // Points of the polygon / line being drawn; for Circle: center, then the rim point under the cursor.
     std::vector<mapdata::Pos> draft;
     std::string message;  // why the last click did nothing; shown in the tool panel
+    std::vector<std::size_t> corps_draft;  // divisions picked for a new corps (unit indices)
 
 private:
     mapdata::ScenarioData& scenario();
@@ -96,6 +103,11 @@ const char* side_label(std::uint8_t side);
 
 // Removes every entry at `node`; adds `(side, node)` if there was none. One per node.
 void toggle_at(std::vector<mapdata::SideNode>& list, std::uint8_t side, mapdata::NodeId node);
+
+// Corps holding unit `i`, if any.
+std::optional<std::size_t> corps_of(const mapdata::ScenarioData& s, std::size_t i);
+// Takes unit `i` out of its corps; a corps left with fewer than 2 divisions is disbanded.
+void remove_from_corps(mapdata::ScenarioData& s, std::size_t i);
 
 // Cells whose center lies inside become one new region of `side` (legal owner and controller).
 // Output moves with the cells: each source region gives up the share of cells it lost.

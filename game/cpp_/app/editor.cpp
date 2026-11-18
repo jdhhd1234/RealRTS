@@ -133,6 +133,20 @@ void toggle_at(std::vector<mapdata::SideNode>& list, std::uint8_t side, mapdata:
     if (list.size() == before) list.push_back({side, node});
 }
 
+std::optional<std::size_t> corps_of(const mapdata::ScenarioData& s, std::size_t i) {
+    for (std::size_t c = 0; c < s.corps.size(); ++c) {
+        if (std::ranges::find(s.corps[c].units, i) != s.corps[c].units.end()) return c;
+    }
+    return std::nullopt;
+}
+
+void remove_from_corps(mapdata::ScenarioData& s, std::size_t i) {
+    const auto c = corps_of(s, i);
+    if (!c) return;
+    std::erase(s.corps[*c].units, static_cast<std::uint32_t>(i));
+    if (s.corps[*c].units.size() < mapdata::CORPS_MIN) s.corps.erase(s.corps.begin() + static_cast<std::ptrdiff_t>(*c));
+}
+
 std::size_t carve_polygon(mapdata::Baked& b, const std::vector<mapdata::Pos>& polygon, std::uint8_t side) {
     if (polygon.size() < 3) return 0;
     return carve(b, [&](mapdata::Pos p) { return inside_polygon(polygon, p); }, side);
@@ -175,17 +189,21 @@ void Editor::set_source(mapdata::Baked source) {
     drag.reset();
     draft.clear();
     message.clear();
+    corps_draft.clear();
 }
 
 void Editor::set_tool(Tool t) {
     tool = t;
     draft.clear();
     message.clear();
+    corps_draft.clear();
 }
 
 void Editor::toggle(Play& play) {
     on = !on;
     drag.reset();
+    play.front_corps.reset();
+    play.front_draft.clear();
     if (on) {
         reload = true;
         play.selected.reset();
@@ -240,15 +258,35 @@ std::optional<std::size_t> Editor::selected_index(const std::optional<sim::UnitI
 }
 
 void Editor::delete_unit(std::size_t i, std::optional<sim::UnitId>& selected) {
-    auto& units = scenario().units;
-    units.erase(units.begin() + static_cast<std::ptrdiff_t>(i));
+    auto& s = scenario();
+    remove_from_corps(s, i);
+    s.units.erase(s.units.begin() + static_cast<std::ptrdiff_t>(i));
+    for (auto& c : s.corps) {
+        for (auto& u : c.units) u -= u > i ? 1 : 0;  // later units move up one index
+    }
+    corps_draft.clear();
     selected.reset();
 }
 
 void Editor::flip_side(std::size_t i) {
-    auto& u = scenario().units[i];
+    auto& s = scenario();
+    remove_from_corps(s, i);  // a corps is one side only
+    auto& u = s.units[i];
     u.side = u.side == PLAYER_SIDE ? 1 : PLAYER_SIDE;
+    corps_draft.clear();
 }
+
+void Editor::create_corps() {
+    if (corps_draft.size() < mapdata::CORPS_MIN || corps_draft.size() > mapdata::CORPS_MAX) return;
+    auto& s = scenario();
+    const auto n = std::ranges::count_if(s.corps, [&](const auto& c) { return c.side == side; }) + 1;
+    mapdata::CorpsSpec c{side, std::format("{} Corps {}", side_label(side), n), {}};
+    for (const std::size_t i : corps_draft) c.units.push_back(static_cast<std::uint32_t>(i));
+    s.corps.push_back(std::move(c));
+    corps_draft.clear();
+}
+
+void Editor::leave_corps(std::size_t i) { remove_from_corps(scenario(), i); }
 
 bool Editor::apply_edits(entt::registry& world) {
     if (!std::exchange(reload, false)) return false;
@@ -312,6 +350,23 @@ void Editor::edit_mouse(const EditInput& in, const mapdata::MapData& m, std::opt
             const auto n = std::ranges::count_if(s.units, [&](const auto& u) { return u.side == side; }) + 1;
             s.units.push_back({side, std::format("{} Division {}", side_label(side), n), pos});
             selected = sim::UnitId{static_cast<std::uint32_t>(s.units.size())};
+            break;
+        }
+        case Tool::Corps: {
+            const auto hit = nearest_unit(baked.scenario, pos, in.reach);
+            if (!hit) return;
+            const auto& s = baked.scenario;
+            if (s.units[*hit].side != side) {
+                message = "Pick divisions of the chosen side.";
+            } else if (const auto c = corps_of(s, *hit)) {
+                message = std::format("Already in {}.", s.corps[*c].name);
+            } else if (std::erase(corps_draft, *hit) == 0) {
+                if (corps_draft.size() < mapdata::CORPS_MAX) {
+                    corps_draft.push_back(*hit);
+                } else {
+                    message = "A corps has at most 5 divisions.";
+                }
+            }
             break;
         }
         case Tool::Depot:

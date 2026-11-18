@@ -72,8 +72,21 @@ struct SimCommand {
         std::string name;
         bool operator==(const BuildDivision&) const = default;
     };
+    // New front line for a corps; fewer than 2 points removes its front.
+    struct SetFront {
+        std::uint32_t corps;
+        std::vector<mapdata::Pos> points;
+        bool operator==(const SetFront&) const = default;
+    };
+    struct SetFrontAttack {
+        std::uint32_t corps;
+        bool attack;
+        bool operator==(const SetFrontAttack&) const = default;
+    };
 
-    std::variant<Move, SetHold, SetSupplyPriority, AntiPartisan, SetRequisition, BuildDivision> value;
+    std::variant<Move, SetHold, SetSupplyPriority, AntiPartisan, SetRequisition, BuildDivision, SetFront,
+                 SetFrontAttack>
+        value;
     bool operator==(const SimCommand&) const = default;
 };
 

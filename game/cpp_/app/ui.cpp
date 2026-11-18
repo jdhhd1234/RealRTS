@@ -176,7 +176,8 @@ std::vector<El> editor_palette(const Editor& ed) {
         const auto units = std::ranges::count_if(s.units, [&](const auto& u) { return u.side == side; });
         const auto depots = std::ranges::count_if(s.depots, [&](const auto& d) { return d.side == side; });
         const auto bases = std::ranges::count_if(s.bases, [&](const auto& b) { return b.side == side; });
-        v.push_back(kv(side_label(side), std::format("{} div, {} depots, {} bases", units, depots, bases),
+        const auto corps = std::ranges::count_if(s.corps, [&](const auto& c) { return c.side == side; });
+        v.push_back(kv(side_label(side), std::format("{} div, {} corps, {} depots, {} bases", units, corps, depots, bases),
                        side == PLAYER_SIDE ? Tone::Friendly : Tone::Enemy));
     }
     v.push_back(wide("Save scenario (.json)...", act(ActionKind::SaveScenario), false));
@@ -192,6 +193,7 @@ std::vector<El> editor_detail(const Editor& ed, const std::optional<sim::UnitId>
         switch (ed.tool) {
             case Tool::Select: hint = "Click a unit to select it; drag to move."; break;
             case Tool::Division: hint = "Click on the map to place a division of the chosen side."; break;
+            case Tool::Corps: hint = "Click 2 to 5 divisions of the chosen side, then Create corps."; break;
             case Tool::Depot: hint = "Click near a node: adds a field depot, or removes the one there."; break;
             case Tool::Base:
                 hint = "Click near a node: adds a supply base (national supply enters here), or removes it.";
@@ -214,6 +216,11 @@ std::vector<El> editor_detail(const Editor& ed, const std::optional<sim::UnitId>
         }
         std::vector<El> v{title("TOOL"), text(hint, Tone::Normal)};
         if (!ed.message.empty()) v.push_back(text(ed.message, Tone::Alert));
+        if (ed.tool == Tool::Corps) {
+            const std::size_t n = ed.corps_draft.size();
+            v.push_back(kv("Picked", std::format("{} / 2-5 divisions", n), Tone::Normal));
+            if (n >= mapdata::CORPS_MIN) v.push_back(wide("Create corps", act(ActionKind::CreateCorps), false));
+        }
         for (std::uint8_t side : {PLAYER_SIDE, std::uint8_t{1}}) {
             if (std::ranges::none_of(ed.baked.scenario.bases, [&](const auto& b) { return b.side == side; })) {
                 v.push_back(text(std::format("{} has no supply base: it gets no supply.", side_label(side)), Tone::Warn));
@@ -224,7 +231,8 @@ std::vector<El> editor_detail(const Editor& ed, const std::optional<sim::UnitId>
     const auto& u = ed.baked.scenario.units[*i];
     std::string region;
     if (auto c = m.terrain.cell_at(u.pos)) region = m.regions[m.region_at(c->x, c->y).value].name;
-    return {
+    const auto corps = corps_of(ed.baked.scenario, *i);
+    std::vector<El> v{
         title("UNIT"),
         text(u.name, u.side == PLAYER_SIDE ? Tone::Friendly : Tone::Enemy),
         kv("Side", side_label(u.side), Tone::Normal),
@@ -232,7 +240,31 @@ std::vector<El> editor_detail(const Editor& ed, const std::optional<sim::UnitId>
         kv("Region", region, Tone::Normal),
         text("Standard division: 6 inf, 2 armor, 2 arty bn, full supply.", Tone::Dim),
         buttons({{"Switch side", act(ActionKind::EditFlip), false}, {"Delete (Del)", act(ActionKind::EditDelete), false}}),
+        kv("Corps", corps ? ed.baked.scenario.corps[*corps].name : "None", Tone::Normal),
     };
+    if (corps) v.push_back(wide("Leave corps", act(ActionKind::LeaveCorps), false));
+    return v;
+}
+
+// Corps of the selected division in play: its front line state and orders.
+void corps_section(std::vector<El>& v, const entt::registry& w, const Play& play, sim::UnitId unit, bool own) {
+    const auto& list = w.ctx().get<sim::CorpsList>().value;
+    const auto it = std::ranges::find_if(list, [&](const sim::Corps& c) { return std::ranges::find(c.members, unit) != c.members.end(); });
+    if (it == list.end()) return;
+    const sim::Corps& c = *it;
+    const char* state = "No front line";
+    if (c.front) state = !c.front->formed ? "Moving to the line" : c.front->attack ? "Attacking" : "Holding the line";
+    v.push_back(title("CORPS"));
+    v.push_back(kv(c.name, std::format("{} divisions", c.members.size()), Tone::Normal));
+    v.push_back(kv("Front", state, Tone::Normal));
+    if (!own) return;
+    const bool drawing = play.front_corps == c.id;
+    v.push_back(wide(drawing ? "Drawing: LMB points, Enter/RMB ends, Esc cancels" : "Draw front line",
+                     {.kind = ActionKind::DrawFront, .index = c.id}, drawing));
+    if (!c.front) return;
+    v.push_back(buttons({{"Defend", {.kind = ActionKind::FrontAttack, .flag = false, .index = c.id}, !c.front->attack},
+                         {"Attack", {.kind = ActionKind::FrontAttack, .flag = true, .index = c.id}, c.front->attack}}));
+    v.push_back(wide("Clear front", {.kind = ActionKind::ClearFront, .index = c.id}, false));
 }
 
 Panels build_panels(const UiState& ui, const UiView& view) {
@@ -526,6 +558,7 @@ Panels build_panels(const UiState& ui, const UiView& view) {
                                    act(ActionKind::TogglePriority), prio > 0));
             p.right.push_back(wide("Deselect", act(ActionKind::Deselect), false));
         }
+        corps_section(p.right, w, play, sel->id, side == PLAYER_SIDE);
     } else {
         p.right.push_back(title("THEATER SUMMARY"));
         p.right.push_back(kv("Divisions", std::to_string(own.size()), Tone::Normal));
@@ -757,6 +790,20 @@ void ui_actions(const std::vector<Action>& actions, UiState& ui, UiTargets t) {
                 if (auto i = t.editor.selected_index(t.play.selected)) t.editor.delete_unit(*i, t.play.selected);
                 break;
             case ActionKind::SaveScenario: t.loader.save_dialog(t.editor.baked, t.file); break;
+            case ActionKind::CreateCorps: t.editor.create_corps(); break;
+            case ActionKind::LeaveCorps:
+                if (auto i = t.editor.selected_index(t.play.selected)) t.editor.leave_corps(*i);
+                break;
+            case ActionKind::DrawFront:
+                t.play.front_corps = static_cast<std::uint32_t>(a.index);
+                t.play.front_draft.clear();
+                break;
+            case ActionKind::FrontAttack:
+                queue.push_back({sim::SimCommand::SetFrontAttack{static_cast<std::uint32_t>(a.index), a.flag}});
+                break;
+            case ActionKind::ClearFront:
+                queue.push_back({sim::SimCommand::SetFront{static_cast<std::uint32_t>(a.index), {}}});
+                break;
             case ActionKind::LeftTab: ui.left = a.left_tab; break;
             case ActionKind::BottomTab: ui.bottom = a.bottom_tab; break;
             case ActionKind::Select: t.play.selected = a.unit; break;

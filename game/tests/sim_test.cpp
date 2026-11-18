@@ -820,3 +820,72 @@ TEST_CASE("same_seed_same_outcome") {
     CHECK(a.ctx().get<EdgeState>().damage == b.ctx().get<EdgeState>().damage);
     CHECK(a.ctx().get<EventLog>().value == b.ctx().get<EventLog>().value);
 }
+
+namespace {
+
+// Two blue divisions in a corps west of x = 15 km; red holds x >= 20 km with one division far east.
+entt::registry corps_world() {
+    auto world = world_with(plains());
+    auto& t = world.ctx().get<Territory>();
+    for (std::uint32_t cy = 0; cy < 10; ++cy) {
+        for (std::uint32_t cx = 20; cx < 40; ++cx) t.military[cy * 40 + cx] = 1;
+    }
+    division(world, 1, 0, "A", km(5, 2));
+    division(world, 2, 0, "B", km(5, 8));
+    division(world, 3, 1, "R", km(38, 5));
+    world.ctx().get<CorpsList>().value.push_back({1, 0, "I Corps", {UnitId{2}, UnitId{1}}, std::nullopt});
+    return world;
+}
+
+Pos pos_of(entt::registry& world, std::uint32_t id) {
+    for (auto [e, uid, pos] : world.view<const UnitId, const Position>().each()) {
+        if (uid.value == id) return pos.value;
+    }
+    return {};
+}
+
+}  // namespace
+
+TEST_CASE("front_slots_split_the_line_evenly") {
+    const auto s = front_slots({km(0, 0), km(0, 4), km(4, 4)}, 4, false);
+    REQUIRE(s.size() == 4);
+    CHECK(s[0].pos == km(0, 1));
+    CHECK(s[1].pos == km(0, 3));
+    CHECK(s[2].pos == km(1, 4));
+    CHECK(s[0].normal == std::pair{-1.0f, 0.0f});  // left of north
+    CHECK(s[3].normal == std::pair{0.0f, 1.0f});   // left of east
+}
+
+TEST_CASE("corps_deploys_along_its_front_facing_the_enemy") {
+    auto world = corps_world();
+    world.ctx().get<CommandQueue>().value.push_back({SimCommand::SetFront{1, {km(15, 1), km(15, 9)}}});
+    run(world, 120);
+    const auto& c = world.ctx().get<CorpsList>().value[0];
+    REQUIRE(c.front);
+    CHECK(c.front->flip);  // red ground is east, to the right of a line drawn northward
+    CHECK(c.front->formed);
+    CHECK(c.members[0] == UnitId{1});  // re-ordered: A stands at the south end
+    const Pos a = pos_of(world, 1), b = pos_of(world, 2);
+    CHECK(std::abs(a.x - 15'000.0f) < 1'500.0f);
+    CHECK(std::abs(a.y - 3'000.0f) < 1'500.0f);
+    CHECK(std::abs(b.y - 7'000.0f) < 1'500.0f);
+    for (auto [e, uid, dep] : world.view<const UnitId, const Deployment>().each()) {
+        if (uid.value != 3) CHECK(dep.facing.first > 0.9f);
+    }
+}
+
+TEST_CASE("attacking_corps_moves_its_front_forward") {
+    auto world = corps_world();
+    auto& q = world.ctx().get<CommandQueue>().value;
+    q.push_back({SimCommand::SetFront{1, {km(15, 1), km(15, 9)}}});
+    q.push_back({SimCommand::SetFrontAttack{1, true}});
+    run(world, 150);
+    const auto& f = *world.ctx().get<CorpsList>().value[0].front;
+    CHECK(f.formed);
+    CHECK(pos_of(world, 1).x > 18'000.0f);
+    CHECK(f.points[1].x == pos_of(world, 1).x);  // the line follows the divisions
+
+    world.ctx().get<CommandQueue>().value.push_back({SimCommand::SetFront{1, {}}});
+    run(world, 1);
+    CHECK_FALSE(world.ctx().get<CorpsList>().value[0].front);
+}
