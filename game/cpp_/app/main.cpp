@@ -299,6 +299,9 @@ void draw_network(const entt::registry& world, const Play& play, float px) {
 void draw_symbols(const entt::registry& world, const Editor& ed, const Symbols& symbols, const Camera2D& cam) {
     const auto& m = world.ctx().get<sim::Map>().value;
     const auto screen = [&](mapdata::Pos p) { return GetWorldToScreen2D(to_draw(p), cam); };
+    for (const auto& b : world.ctx().get<sim::SupplyBases>().value) {
+        symbols.draw(b.side, Kind::Base, screen(m.graph.node(b.node).pos), SYMBOL_PX);
+    }
     // Depots get a supply symbol; it switches sides when the depot is captured.
     for (auto [e, d] : world.view<const sim::Depot>().each()) {
         symbols.draw(d.side, Kind::Depot, screen(m.graph.node(d.node).pos), SYMBOL_PX * 0.8f);
@@ -358,17 +361,27 @@ void draw_markers(const entt::registry& world, const Play& play, float px) {
     }
 }
 
-// Editor markers: every node, and supply bases (not drawn in play) as side-colored squares.
-void draw_editor(const Editor& ed, const mapdata::MapData& m, float px) {
+// Editor markers: every node, and the shape or line being drawn (rubber band to the cursor).
+void draw_editor(const Editor& ed, const mapdata::MapData& m, mapdata::Pos cursor, float px) {
     for (const auto& n : m.graph.nodes) DrawCircleLinesV(to_draw(n.pos), 4.0f * px, BLACK);
-    for (const auto& b : ed.baked.scenario.bases) {
-        const Vector2 p = to_draw(m.graph.node(b.node).pos);
-        const Color c = b.side == PLAYER_SIDE ? FRIENDLY : ENEMY;
-        for (float k : {1.1f, 1.0f}) {
-            const float s = SYMBOL_PX * k * px;
-            DrawRectangleLinesEx({p.x - s / 2, p.y - s / 2, s, s}, px, c);
-        }
+    if (ed.draft.empty()) return;
+    const Color side = ed.side == PLAYER_SIDE ? FRIENDLY : ENEMY;
+    if (ed.tool == Tool::Circle) {
+        const Vector2 c = to_draw(ed.draft[0]);
+        DrawCircleV(c, Vector2Distance(c, to_draw(ed.draft.back())), ColorAlpha(side, 0.25f));
+        DrawCircleLinesV(c, Vector2Distance(c, to_draw(ed.draft.back())), side);
+        return;
     }
+    Color c = side;
+    if (ed.tool == Tool::Rail) c = {26, 26, 26, 255};
+    if (ed.tool == Tool::Road) c = {140, 89, 38, 255};
+    for (std::size_t i = 0; i < ed.draft.size(); ++i) {
+        const Vector2 p = to_draw(ed.draft[i]);
+        const Vector2 next = to_draw(i + 1 < ed.draft.size() ? ed.draft[i + 1] : cursor);
+        DrawLineEx(p, next, 2.0f * px, c);
+        DrawCircleV(p, 3.0f * px, c);
+    }
+    if (ed.tool == Tool::Border && ed.draft.size() >= 2) DrawLineEx(to_draw(cursor), to_draw(ed.draft[0]), px, ColorAlpha(c, 0.5f));
 }
 
 int run(int argc, char** argv) {
@@ -429,7 +442,7 @@ int run(int argc, char** argv) {
                 }
                 file = status;
             }
-            editor.apply_edits(world);
+            if (editor.apply_edits(world)) overlay_last.reset();  // region borders may have moved
 
             const auto& m = world.ctx().get<sim::Map>().value;
             if (map_changed) {
@@ -441,9 +454,15 @@ int run(int argc, char** argv) {
 
             const bool over_ui = cursor_over_ui(ui);
             if (editor.on) {
-                editor.edit_mouse({cursor_world(cam), SYMBOL_PX * 0.7f * world_per_px(cam), IsMouseButtonPressed(MOUSE_BUTTON_LEFT),
-                                   IsMouseButtonDown(MOUSE_BUTTON_LEFT), IsKeyPressed(KEY_DELETE), over_ui},
-                                  m, play.selected);
+                EditInput in{cursor_world(cam), SYMBOL_PX * 0.7f * world_per_px(cam)};
+                in.left_pressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+                in.left_down = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+                in.delete_pressed = IsKeyPressed(KEY_DELETE);
+                in.finish_pressed = IsKeyPressed(KEY_ENTER) || (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && !over_ui);
+                in.undo_pressed = IsKeyPressed(KEY_BACKSPACE);
+                in.cancel_pressed = IsKeyPressed(KEY_ESCAPE);
+                in.over_ui = over_ui;
+                editor.edit_mouse(in, m, play.selected);
             } else {
                 speed_controls(play);
                 mouse_orders(world, play, cam, over_ui);
@@ -482,7 +501,7 @@ int run(int argc, char** argv) {
             draw_symbols(world, editor, symbols, cam);
             BeginMode2D(cam);
             draw_markers(world, play, px);
-            if (editor.on) draw_editor(editor, m, px);
+            if (editor.on) draw_editor(editor, m, cursor_world(cam), px);
             EndMode2D();
             const auto clicked = draw_ui(ui, {world, play, editor, file});
             EndDrawing();
@@ -496,4 +515,7 @@ int run(int argc, char** argv) {
 }  // namespace
 }  // namespace app
 
-int main(int argc, char** argv) { return app::run(argc, argv); }
+int main(int argc, char** argv) 
+{ 
+    return app::run(argc, argv); 
+}

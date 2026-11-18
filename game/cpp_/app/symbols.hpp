@@ -1,5 +1,5 @@
 #pragma once
-// NATO APP-6 (D) symbols for units and depots (architect.md 7, M9).
+// NATO APP-6 (D) symbols for units, depots and supply bases (architect.md 7, M9).
 // PNGs come from milsymbol via `tools/symbols/gen.mjs` + `png.mjs` and live in `game/assets/symbols/`.
 // Symbols keep a constant on-screen size at every zoom.
 
@@ -15,9 +15,9 @@ namespace app {
 // On-screen symbol height in pixels.
 inline constexpr float SYMBOL_PX = 34.0f;
 
-enum class Kind { Infantry, Armor, Artillery, Partisan, Depot };
+enum class Kind { Infantry, Armor, Artillery, Partisan, Depot, Base };
 
-inline constexpr std::array<const char*, 5> KIND_FILES{"infantry", "armor", "artillery", "partisan", "depot"};
+inline constexpr std::array<const char*, 6> KIND_FILES{"infantry", "armor", "artillery", "partisan", "depot", "base"};
 
 // Owns one GPU texture. Move-only so the texture is unloaded exactly once.
 class Texture {
@@ -38,7 +38,7 @@ private:
     Texture2D tex{};
 };
 
-// (friendly, kind) -> texture. Index = friendly * 5 + kind.
+// (side, kind) -> texture. Index = side * KIND_FILES.size() + kind.
 class Symbols {
 public:
     // Loads every PNG from `dir`. Throws std::runtime_error if one is missing.

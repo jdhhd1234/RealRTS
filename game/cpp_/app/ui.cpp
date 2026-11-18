@@ -198,9 +198,22 @@ std::vector<El> editor_detail(const Editor& ed, const std::optional<sim::UnitId>
                 break;
             case Tool::Region: hint = "Click a region: chosen side becomes legal owner and controller."; break;
             case Tool::Occupy: hint = "Click a region: chosen side occupies it (owner unchanged)."; break;
+            case Tool::Border:
+                hint = "Click the corners; Enter or right click closes. Cells inside become a new region of the "
+                       "chosen side. Backspace: undo point, Esc: cancel.";
+                break;
+            case Tool::Circle:
+                hint = "Press at the center and drag to the rim. Cells inside become a new region of the chosen side.";
+                break;
+            case Tool::Rail:
+            case Tool::Road:
+                hint = "Click the points; near a node it joins that node. Enter or right click ends the line. "
+                       "Backspace: undo point, Esc: cancel.";
+                break;
             case Tool::Delete: hint = "Click a unit, depot or base to delete it."; break;
         }
         std::vector<El> v{title("TOOL"), text(hint, Tone::Normal)};
+        if (!ed.message.empty()) v.push_back(text(ed.message, Tone::Alert));
         for (std::uint8_t side : {PLAYER_SIDE, std::uint8_t{1}}) {
             if (std::ranges::none_of(ed.baked.scenario.bases, [&](const auto& b) { return b.side == side; })) {
                 v.push_back(text(std::format("{} has no supply base: it gets no supply.", side_label(side)), Tone::Warn));
@@ -735,7 +748,7 @@ void ui_actions(const std::vector<Action>& actions, UiState& ui, UiTargets t) {
             case ActionKind::LoadTestMap: t.loader.load_test_map(); break;
             case ActionKind::Quit: t.quit = true; break;
             case ActionKind::ToggleEditor: t.editor.toggle(t.play); break;
-            case ActionKind::Tool: t.editor.tool = a.tool; break;
+            case ActionKind::Tool: t.editor.set_tool(a.tool); break;
             case ActionKind::EditSide: t.editor.side = a.side; break;
             case ActionKind::EditFlip:
                 if (auto i = t.editor.selected_index(t.play.selected)) t.editor.flip_side(*i);

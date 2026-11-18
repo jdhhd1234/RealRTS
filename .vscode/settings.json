@@ -1,3 +1,7 @@
 {
-    "cmake.sourceDirectory": "C:/Users/kym10/Documents/VSCodProj_Vibe/RealRTS_cpp/game"
+    "cmake.sourceDirectory": "C:/Users/kym10/Documents/VSCodProj_Vibe/RealRTS_cpp/game",
+    "cmake.buildDirectory": "${workspaceFolder}/game/build",
+    "cmake.generator": "Ninja",
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "clangd.arguments": ["--compile-commands-dir=${workspaceFolder}/game/build", "--header-insertion=never"]
 }
